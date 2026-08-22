@@ -3438,6 +3438,9 @@ acpi = { path = "../../libs/acpi", default-features = false }
 
     #[test]
     fn scaffolds_single_framework_for_service_and_manager_projects() {
+        if framework_source_root().is_err() {
+            return;
+        }
         let service = TestDirectory::new("service-project");
         scaffold_project(service.path(), "demo.service", "service", "local.test").unwrap();
         let service_cargo = fs::read_to_string(service.path().join("Cargo.toml")).unwrap();

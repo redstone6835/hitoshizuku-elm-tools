@@ -10,7 +10,7 @@
 ## 安装
 
 ```sh
-cargo install --git https://github.com/redstone6835/hitoshizuku-elm-tools cargo-elm
+cargo install --locked --git https://github.com/redstone6835/hitoshizuku-elm-tools cargo-elm
 ```
 
 开发本仓库时可直接运行：
