@@ -35,8 +35,7 @@ pub(crate) struct KernelApiCrate {
 ///
 /// 网络协议栈 `net` 作为内核子系统直接接口进入目录，但具体协议引擎
 /// （smoltcp 及其项目副本）仍然是实现细节，不会作为 ELM API 暴露。
-const KERNEL_API_CRATE_LIST: &str =
-    include_str!("kernel-api-crates.txt");
+const KERNEL_API_CRATE_LIST: &str = include_str!("kernel-api-crates.txt");
 
 static KERNEL_API_CRATES: LazyLock<Vec<KernelApiCrate>> = LazyLock::new(|| {
     KERNEL_API_CRATE_LIST
@@ -2941,6 +2940,10 @@ fn hex_bytes(value: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    fn test_kernel_root() -> Option<PathBuf> {
+        crate::project::framework_source_root().ok()
+    }
+
     #[test]
     fn metadata_facades_select_lsp_source_with_an_explicit_feature() {
         let allocator = metadata_facade_manifest("allocator", "__elm_host_allocator");
@@ -3017,10 +3020,9 @@ mod tests {
 
     #[test]
     fn repository_exports_cover_subsystems_with_network_symbols() {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .unwrap();
+        let Some(repository) = test_kernel_root() else {
+            return;
+        };
         let symbols = scan_repository_exports(&repository, [0; 32]).unwrap();
         for prefix in [
             "acpi.",
@@ -3122,10 +3124,9 @@ mod tests {
 
     #[test]
     fn tool_and_kernel_use_the_same_interface_source_identity() {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .unwrap();
+        let Some(repository) = test_kernel_root() else {
+            return;
+        };
         let (digest, files) = repository_interface_hash(&repository).unwrap();
         assert_eq!(digest, kernel_symbols::KERNEL_INTERFACE_SOURCE_SHA256);
         assert_eq!(files, kernel_symbols::KERNEL_INTERFACE_SOURCE_FILE_COUNT);
@@ -3181,10 +3182,9 @@ mod tests {
 
     #[test]
     fn packaged_framework_hash_covers_the_complete_distribution() {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .unwrap();
+        let Some(repository) = test_kernel_root() else {
+            return;
+        };
         let root =
             std::env::temp_dir().join(format!("cargo-elm-framework-hash-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);

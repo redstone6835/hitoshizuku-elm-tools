@@ -1669,19 +1669,42 @@ pub fn diagnose_project(project: &Path) -> Result<String, String> {
 }
 
 pub(crate) fn framework_source_root() -> Result<PathBuf, String> {
-    let root = std::env::var_os("HITOSHIZUKU_KERNEL_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
-    let root = root
-        .canonicalize()
-        .map_err(|err| format!("定位 Hitoshizuku 内核源码失败（请设置 HITOSHIZUKU_KERNEL_ROOT）: {err}"))?;
-    if !root.join("Cargo.toml").is_file() || !root.join("libs").is_dir() {
-        return Err(format!(
-            "{} 不是 Hitoshizuku 内核仓库（请设置 HITOSHIZUKU_KERNEL_ROOT）",
-            root.display()
-        ));
+    if let Some(configured) = std::env::var_os("HITOSHIZUKU_KERNEL_ROOT") {
+        let configured = PathBuf::from(configured);
+        return canonical_kernel_root(&configured).ok_or_else(|| {
+            format!(
+                "HITOSHIZUKU_KERNEL_ROOT={} 不是有效的 Hitoshizuku 内核仓库",
+                configured.display()
+            )
+        });
     }
-    Ok(root)
+
+    if let Ok(current) = std::env::current_dir() {
+        for candidate in current.ancestors() {
+            if let Some(root) = canonical_kernel_root(candidate) {
+                return Ok(root);
+            }
+        }
+    }
+
+    // 兼容工具仍嵌在旧内核树 tools/elm-tools 下的 checkout。
+    let legacy = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if let Some(root) = canonical_kernel_root(&legacy) {
+        return Ok(root);
+    }
+
+    Err(
+        "无法定位 Hitoshizuku 内核源码；请在内核 checkout 中运行，或设置 HITOSHIZUKU_KERNEL_ROOT"
+            .to_string(),
+    )
+}
+
+fn canonical_kernel_root(candidate: &Path) -> Option<PathBuf> {
+    let root = candidate.canonicalize().ok()?;
+    (root.join("Cargo.toml").is_file()
+        && root.join("kernel/Cargo.toml").is_file()
+        && root.join("libs/elm/Cargo.toml").is_file())
+    .then_some(root)
 }
 
 /// 返回 build-set 级别共享的 ELM framework。独立执行 `cargo elm build` 时

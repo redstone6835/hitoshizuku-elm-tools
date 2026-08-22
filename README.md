@@ -17,7 +17,7 @@ cargo install --path . --force
 
 ## 指定内核源码
 
-工具默认假定自己位于内核仓库的 `tools/elm-tools` 目录。独立安装后，请设置
+在内核 checkout 中运行时，工具会从当前目录自动定位源码。由其他目录直接调用时，设置
 `HITOSHIZUKU_KERNEL_ROOT` 指向与目标内核镜像对应的 checkout：
 
 ```sh
