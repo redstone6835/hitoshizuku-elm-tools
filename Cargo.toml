@@ -1,0 +1,20 @@
+[workspace]
+
+[package]
+name = "cargo-elm"
+version = "0.1.0"
+edition = "2024"
+description = "Hitoshizuku ELM host tooling and cargo-elm subcommand"
+license = "GPL-3.0-only"
+repository = "https://github.com/redstone6835/hitoshizuku-elm-tools"
+
+[[bin]]
+name = "cargo-elm"
+path = "src/main.rs"
+
+[dependencies]
+elm = { git = "https://github.com/redstone6835/hitoshizuku.git", rev = "46c15e095e66eb9dbf6a6102f7aed6628899f87a", default-features = false, features = ["runtime-model", "macros"] }
+kernel-symbols = { git = "https://github.com/redstone6835/hitoshizuku.git", rev = "46c15e095e66eb9dbf6a6102f7aed6628899f87a", default-features = false }
+ed25519-dalek = { version = "=2.2.0", features = ["zeroize"] }
+quote = "=1.0.45"
+syn = { version = "=2.0.117", features = ["full", "parsing"] }
