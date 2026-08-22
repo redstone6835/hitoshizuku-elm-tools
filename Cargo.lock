@@ -133,7 +133,7 @@ dependencies = [
 [[package]]
 name = "elm"
 version = "0.1.0"
-source = "git+https://github.com/redstone6835/hitoshizuku.git?rev=46c15e095e66eb9dbf6a6102f7aed6628899f87a#46c15e095e66eb9dbf6a6102f7aed6628899f87a"
+source = "git+https://github.com/redstone6835/hitoshizuku.git?rev=b1ab1ffa3466f99e1be84c32c0e5248c62fac5ca#b1ab1ffa3466f99e1be84c32c0e5248c62fac5ca"
 dependencies = [
  "ed25519-dalek",
  "elm-macros",
@@ -143,7 +143,7 @@ dependencies = [
 [[package]]
 name = "elm-macros"
 version = "0.1.0"
-source = "git+https://github.com/redstone6835/hitoshizuku.git?rev=46c15e095e66eb9dbf6a6102f7aed6628899f87a#46c15e095e66eb9dbf6a6102f7aed6628899f87a"
+source = "git+https://github.com/redstone6835/hitoshizuku.git?rev=b1ab1ffa3466f99e1be84c32c0e5248c62fac5ca#b1ab1ffa3466f99e1be84c32c0e5248c62fac5ca"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -180,7 +180,7 @@ dependencies = [
 [[package]]
 name = "kernel-symbols"
 version = "0.1.0"
-source = "git+https://github.com/redstone6835/hitoshizuku.git?rev=46c15e095e66eb9dbf6a6102f7aed6628899f87a#46c15e095e66eb9dbf6a6102f7aed6628899f87a"
+source = "git+https://github.com/redstone6835/hitoshizuku.git?rev=b1ab1ffa3466f99e1be84c32c0e5248c62fac5ca#b1ab1ffa3466f99e1be84c32c0e5248c62fac5ca"
 
 [[package]]
 name = "libc"

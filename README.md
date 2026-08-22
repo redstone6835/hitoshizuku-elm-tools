@@ -3,6 +3,10 @@
 本仓库提供 `cargo-elm`：用于生成内核接口包、校验 ELM 工程、构建模块集合和
 导出 EKI/EBI 产物的主机端 Cargo 子命令。它不是内核 workspace 的成员。
 
+本仓库从内核仓库提交
+[`46c15e09`](https://github.com/redstone6835/hitoshizuku/commit/46c15e095e66eb9dbf6a6102f7aed6628899f87a)
+拆分；此前历史仍由内核仓库保存。
+
 ## 安装
 
 ```sh

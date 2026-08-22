@@ -13,8 +13,8 @@ name = "cargo-elm"
 path = "src/main.rs"
 
 [dependencies]
-elm = { git = "https://github.com/redstone6835/hitoshizuku.git", rev = "46c15e095e66eb9dbf6a6102f7aed6628899f87a", default-features = false, features = ["runtime-model", "macros"] }
-kernel-symbols = { git = "https://github.com/redstone6835/hitoshizuku.git", rev = "46c15e095e66eb9dbf6a6102f7aed6628899f87a", default-features = false }
+elm = { git = "https://github.com/redstone6835/hitoshizuku.git", rev = "b1ab1ffa3466f99e1be84c32c0e5248c62fac5ca", default-features = false, features = ["runtime-model", "macros"] }
+kernel-symbols = { git = "https://github.com/redstone6835/hitoshizuku.git", rev = "b1ab1ffa3466f99e1be84c32c0e5248c62fac5ca", default-features = false }
 ed25519-dalek = { version = "=2.2.0", features = ["zeroize"] }
 quote = "=1.0.45"
 syn = { version = "=2.0.117", features = ["full", "parsing"] }
