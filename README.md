@@ -50,6 +50,9 @@ cargo elm sync .
 cargo elm build . --arch riscv64 --unsigned
 ```
 
+首次 `sync` 后，`build` 和 `check` 会复用工程中的 `.elm/kernel-interface`，不要求每次
+重新设置内核路径；需要发现新 Profile 或刷新接口包时，再设置内核路径并执行 `sync`。
+
 不同架构的接口包必须由同一内核提交和同一 framework 快照生成。工具会拒绝混用
 摘要不同的 Profile，避免模块在开发时看到与最终内核不一致的 Rust API。
 

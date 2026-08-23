@@ -763,27 +763,37 @@ fn with_framework_manifest<T, F>(project: &Path, operation: F) -> Result<T, Stri
 where
     F: FnOnce() -> Result<T, String>,
 {
-    let repository = framework_source_root()?;
-    let manifests = reachable_cargo_manifests(project, &repository)?;
     let framework = configured_framework_root(project)?;
+    let root_manifest = project.join("Cargo.toml");
+    let root_source = fs::read_to_string(&root_manifest)
+        .map_err(|err| format!("读取 {} 失败: {err}", root_manifest.display()))?;
     let mut originals = Vec::new();
     let mut changed = Vec::new();
-    for path in manifests {
-        let original = fs::read_to_string(&path)
-            .map_err(|err| format!("读取 {} 失败: {err}", path.display()))?;
-        let manifest_dir = path
-            .parent()
-            .ok_or_else(|| format!("manifest 缺少父目录: {}", path.display()))?;
-        let rewritten =
-            rewrite_kernel_manifest_paths(&original, manifest_dir, &repository, &framework)?;
-        let rewritten = if path == project.join("Cargo.toml") {
-            framework_manifest_source(&rewritten)
-        } else {
-            rewritten
-        };
-        if rewritten != original {
-            originals.push((path.clone(), original));
-            changed.push((path, rewritten));
+    if has_kernel_source_dependencies(&root_source) {
+        let repository = framework_source_root()?;
+        for path in reachable_cargo_manifests(project, &repository)? {
+            let original = fs::read_to_string(&path)
+                .map_err(|err| format!("读取 {} 失败: {err}", path.display()))?;
+            let manifest_dir = path
+                .parent()
+                .ok_or_else(|| format!("manifest 缺少父目录: {}", path.display()))?;
+            let rewritten =
+                rewrite_kernel_manifest_paths(&original, manifest_dir, &repository, &framework)?;
+            let rewritten = if path == root_manifest {
+                framework_manifest_source(&rewritten)
+            } else {
+                rewritten
+            };
+            if rewritten != original {
+                originals.push((path.clone(), original));
+                changed.push((path, rewritten));
+            }
+        }
+    } else {
+        let rewritten = framework_manifest_source(&root_source);
+        if rewritten != root_source {
+            originals.push((root_manifest.clone(), root_source));
+            changed.push((root_manifest, rewritten));
         }
     }
     if changed.is_empty()
@@ -1889,6 +1899,11 @@ fn interface_bundle_root() -> Result<PathBuf, String> {
     if let Some(home) = std::env::var_os("ELM_HOME") {
         return Ok(PathBuf::from(home).join("interfaces"));
     }
+    if let Ok(current) = std::env::current_dir()
+        && let Some(root) = project_interface_bundle_root(&current)
+    {
+        return Ok(root);
+    }
     if let Ok(repository) = framework_source_root() {
         let repository_cache = repository.join("build/elm-interface");
         if repository_cache.exists() {
@@ -1899,6 +1914,21 @@ fn interface_bundle_root() -> Result<PathBuf, String> {
         return Ok(PathBuf::from(home).join(".cache/elm/interfaces"));
     }
     Err("无法定位 ELM 接口仓库；请设置 ELM_KERNEL_INTERFACE_ROOT".to_string())
+}
+
+fn project_interface_bundle_root(start: &Path) -> Option<PathBuf> {
+    start.ancestors().find_map(|directory| {
+        let root = directory.join(".elm/kernel-interface");
+        ["riscv64gc-unknown-none-elf", "loongarch64-unknown-none"]
+            .into_iter()
+            .any(|target| {
+                interface_target_directory(&root, target)
+                    .join("manifest.txt")
+                    .is_file()
+            })
+            .then(|| root.canonicalize().ok())
+            .flatten()
+    })
 }
 
 pub fn available_kernel_interfaces(target: &str) -> Result<Vec<KernelInterfaceBundle>, String> {
@@ -3318,6 +3348,23 @@ mod tests {
     }
 
     #[test]
+    fn discovers_an_ancestor_projects_synced_interface_cache() {
+        let directory = TestDirectory::new("project-interface-cache");
+        let interface = directory
+            .path()
+            .join(".elm/kernel-interface/riscv64gc-unknown-none-elf");
+        let nested = directory.path().join("src/nested");
+        fs::create_dir_all(&interface).unwrap();
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(interface.join("manifest.txt"), "test").unwrap();
+
+        assert_eq!(
+            project_interface_bundle_root(&nested),
+            Some(directory.path().join(".elm/kernel-interface"))
+        );
+    }
+
+    #[test]
     fn missing_profile_error_contains_complete_recovery_steps() {
         let root = Path::new("/tmp/hitoshizuku-interfaces");
         let error = missing_kernel_profile_error("riscv64gc-unknown-none-elf", root);
@@ -3521,6 +3568,39 @@ acpi = { path = "../../libs/acpi", default-features = false }
         assert!(temporary.ends_with(source));
         assert!(!source.contains("[workspace]"));
         assert!(!source.contains(".elm/framework/"));
+    }
+
+    #[test]
+    fn standalone_framework_manifest_does_not_require_a_kernel_checkout() {
+        let directory = TestDirectory::new("standalone-framework-manifest");
+        fs::create_dir_all(directory.path().join(".elm/framework")).unwrap();
+        let manifest = directory.path().join("Cargo.toml");
+        let source = r#"[package]
+name = "demo-module"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+acpi = { path = ".elm/framework/acpi", default-features = false }
+"#;
+        fs::write(&manifest, source).unwrap();
+
+        with_framework_manifest(directory.path(), || {
+            let temporary = fs::read_to_string(&manifest).unwrap();
+            assert!(temporary.starts_with("[workspace]\nresolver = \"2\""));
+            assert!(temporary.contains(".elm/framework/acpi"));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&manifest).unwrap(), source);
+        assert!(!directory.path().join("Cargo.lock").exists());
+        assert!(
+            !directory
+                .path()
+                .join(".elm/.cargo-elm-manifest.lock")
+                .exists()
+        );
     }
 
     #[test]
