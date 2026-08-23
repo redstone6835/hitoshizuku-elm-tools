@@ -28,6 +28,7 @@ use elm::{
 
 mod build_set;
 mod kernel_interface;
+mod language_package;
 mod project;
 mod rust_metadata;
 mod ui;
@@ -215,6 +216,10 @@ fn run() -> Result<(), String> {
         "inspect" => cmd_inspect(command_args),
         "profile-export" => cmd_export_interface(command_args),
         "symbol-probe" => cmd_emit_symbol_probe(command_args),
+        "interface-schema" => cmd_interface_schema(command_args),
+        "sdk" => cmd_language_sdk(command_args),
+        "bridge" => cmd_language_bridge(command_args),
+        "package-check" => cmd_language_package_check(command_args),
         "image-pack-metadata" => cmd_pack_metadata(command_args),
         "image-pack-elf" => cmd_pack_elf(command_args),
         "image-bundle" => cmd_bundle(command_args),
@@ -335,6 +340,60 @@ fn cmd_emit_symbol_probe(args: &[String]) -> Result<(), String> {
         "已生成内核符号探针：symbols={count} output={}",
         args[1]
     ));
+    Ok(())
+}
+
+fn cmd_interface_schema(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        usage();
+        return Err("interface-schema 缺少接口 manifest".to_string());
+    }
+    let interface = Path::new(&args[0]);
+    let options = parse_named_options(&args[1..], &["--package", "--adapters", "--output"])?;
+    let output = Path::new(required_option(&options, "--output")?);
+    let package = options.get("--package").map(Path::new);
+    let adapters = options.get("--adapters").map(Path::new);
+    language_package::generate_interface_schema(interface, package, adapters, output)?;
+    ui::current().success(format!("已生成语言无关接口 schema：{}", output.display()));
+    Ok(())
+}
+
+fn cmd_language_sdk(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        usage();
+        return Err("sdk 缺少接口 manifest".to_string());
+    }
+    let interface = Path::new(&args[0]);
+    let options = parse_named_options(&args[1..], &["--package", "--adapters", "--output"])?;
+    let package = Path::new(required_option(&options, "--package")?);
+    let adapters = Path::new(required_option(&options, "--adapters")?);
+    let output = Path::new(required_option(&options, "--output")?);
+    language_package::generate_rust_sdk(interface, package, adapters, output)?;
+    ui::current().success(format!("已生成 Rust SDK：{}", output.display()));
+    Ok(())
+}
+
+fn cmd_language_bridge(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        usage();
+        return Err("bridge 缺少接口 manifest".to_string());
+    }
+    let interface = Path::new(&args[0]);
+    let options = parse_named_options(&args[1..], &["--adapters", "--output"])?;
+    let adapters = Path::new(required_option(&options, "--adapters")?);
+    let output = Path::new(required_option(&options, "--output")?);
+    language_package::generate_rust_bridge(interface, adapters, output)?;
+    ui::current().success(format!("已生成 Rust ELM bridge：{}", output.display()));
+    Ok(())
+}
+
+fn cmd_language_package_check(args: &[String]) -> Result<(), String> {
+    if args.len() != 1 {
+        usage();
+        return Err("package-check 需要一个 package 目录".to_string());
+    }
+    language_package::check_language_package(Path::new(&args[0]))?;
+    ui::current().success(format!("语言包校验通过：{}", args[0]));
     Ok(())
 }
 

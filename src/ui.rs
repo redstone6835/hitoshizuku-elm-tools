@@ -217,6 +217,63 @@ pub(crate) fn help(command: Option<&str>) -> bool {
                 ("<输出.rs>", "生成的 Rust 源文件路径。"),
             ],
         ),
+        Some("interface-schema") => command_help(
+            ui,
+            "interface-schema",
+            "cargo elm interface-schema <manifest.txt> [--package <LanguagePackage.toml>] [--adapters <LanguageBridge.toml>] --output <interface.schema.json>",
+            "从 EKI 导出的 Kernel API Profile 生成语言无关接口 schema。未提供 adapter 时只输出完整符号目录。",
+            &[
+                ("<manifest.txt>", "profile-export 生成的内核接口清单。"),
+                (
+                    "--package <LanguagePackage.toml>",
+                    "可选语言包；校验目标、profile、capability 和资源上限。",
+                ),
+                (
+                    "--adapters <LanguageBridge.toml>",
+                    "可选 adapter 注册表；每个 operation 必须对应 EKI 导出的 API。",
+                ),
+                ("--output <interface.schema.json>", "必选 schema 输出路径。"),
+            ],
+        ),
+        Some("sdk") => command_help(
+            ui,
+            "sdk",
+            "cargo elm sdk <manifest.txt> --package <LanguagePackage.toml> --adapters <LanguageBridge.toml> --output <目录>",
+            "生成不依赖新语言 runtime 的 Rust SDK、资源句柄类型和接口 schema。",
+            &[
+                ("<manifest.txt>", "Kernel API Profile 接口清单。"),
+                ("--package <LanguagePackage.toml>", "必选语言包 manifest。"),
+                (
+                    "--adapters <LanguageBridge.toml>",
+                    "必选、经过审核的 operation adapter 注册表。",
+                ),
+                (
+                    "--output <目录>",
+                    "必选；生成 lib.rs 和 interface.schema.json。",
+                ),
+            ],
+        ),
+        Some("bridge") => command_help(
+            ui,
+            "bridge",
+            "cargo elm bridge <manifest.txt> --adapters <LanguageBridge.toml> --output <bridge.rs>",
+            "生成语言无关 Rust bridge；只暴露显式 operation 描述和安全调用 trait，不猜测 Rust ABI。",
+            &[
+                ("<manifest.txt>", "Kernel API Profile 接口清单。"),
+                ("--adapters <LanguageBridge.toml>", "必选 adapter 注册表。"),
+                ("--output <bridge.rs>", "必选 bridge Rust 源文件路径。"),
+            ],
+        ),
+        Some("package-check") => command_help(
+            ui,
+            "package-check",
+            "cargo elm package-check <语言包目录>",
+            "严格校验 LanguagePackage.toml、接口 schema 与 EKI 文件。",
+            &[(
+                "<语言包目录>",
+                "包含 LanguagePackage.toml、interface.schema.json 和 EKI 的目录。",
+            )],
+        ),
         Some("build") => command_help(
             ui,
             "build",
@@ -414,6 +471,13 @@ fn global_help(ui: &Ui) {
     ui.command("doctor", "诊断工程、接口和构建环境。");
     ui.command("profile-export", "从内核 ELF 导出 Kernel API Profile。");
     ui.command("symbol-probe", "生成内核符号探针 Rust 源码。");
+    ui.command(
+        "interface-schema",
+        "从 EKI Profile 生成语言无关接口 schema。",
+    );
+    ui.command("sdk", "生成 Rust SDK 和资源句柄类型。");
+    ui.command("bridge", "生成语言无关 Rust ELM bridge。");
+    ui.command("package-check", "校验 LanguagePackage 与其接口/EKI 文件。");
     ui.command("build", "构建单个 ELM 并打包 EKI。");
     ui.command("build-set", "按 Modules.toml 批量构建模块。");
     ui.command("configure-set", "生成 y/m/n 模块配置。");

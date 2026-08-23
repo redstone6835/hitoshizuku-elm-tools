@@ -79,6 +79,28 @@ cargo elm --color never doctor .
 `NO_COLOR` 会关闭自动颜色（显式 `--color always` 仍可强制开启）。`inspect` 的
 `key=value` 输出保持无装饰，适合脚本读取。
 
+## 语言无关 SDK
+
+接口工具可以把内核 EKI Profile 转换为外置语言 runtime 可消费的中立 schema。当前只
+生成 Rust bridge 和 Rust SDK，不引入任何新的语言 runtime：
+
+```sh
+cargo elm interface-schema <manifest.txt> \
+  --package LanguagePackage.toml --adapters LanguageBridge.toml \
+  --output interface.schema.json
+cargo elm bridge <manifest.txt> --adapters LanguageBridge.toml \
+  --output generated/bridge.rs
+cargo elm sdk <manifest.txt> --package LanguagePackage.toml \
+  --adapters LanguageBridge.toml --output generated/rust-sdk
+cargo elm package-check <语言包目录>
+```
+
+`LanguagePackage.toml` 声明 package 身份、目标、profile、capability 和资源上限；
+`LanguageBridge.toml` 逐项登记 API path 到 wire operation 的映射。工具会校验 EKI 中
+确实存在对应符号、目标和 profile 一致、capability 已声明，并为 operation 生成稳定
+ID。生成的 Rust 代码不猜测 `rust_abi`，也不暴露裸指针或物理地址；MMIO、DMA 和
+buffer 只能以不透明 lease/handle 传递。
+
 接口包和模块构建必须使用同一内核提交；不要把接口工具的依赖升级到未验证的
 内核 revision。工具仓库内的 `src/kernel-api-crates.txt` 是接口目录快照，内核
 提交中的同名文件若发生变化，应随工具版本一起更新。
