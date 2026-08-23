@@ -32,6 +32,27 @@ cargo elm profile-export build/loongarch64/kernel \
   --output build/elm-interface/loongarch64
 ```
 
+## 生成目标 Profile
+
+ELM 模块不会隐式编译另一个仓库中的内核。首次为某个架构构建模块，或内核的公共
+framework 发生变化后，应先在 Hitoshizuku 内核仓库生成该目标的接口包：
+
+```sh
+cd "$HITOSHIZUKU_KERNEL_ROOT"
+cargo xtask modules --target riscv64gc-unknown-none-elf
+# 或：cargo xtask modules --target loongarch64-unknown-none
+```
+
+随后回到独立 ELM 工程同步接口并构建：
+
+```sh
+cargo elm sync .
+cargo elm build . --arch riscv64 --unsigned
+```
+
+不同架构的接口包必须由同一内核提交和同一 framework 快照生成。工具会拒绝混用
+摘要不同的 Profile，避免模块在开发时看到与最终内核不一致的 Rust API。
+
 ## 命令帮助和输出
 
 使用 Rust/Cargo 风格的帮助查看所有子命令、参数、默认值和可选值：

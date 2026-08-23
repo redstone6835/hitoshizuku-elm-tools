@@ -1980,10 +1980,13 @@ pub fn selected_kernel_interfaces(
     target: &str,
 ) -> Result<Vec<KernelInterfaceBundle>, String> {
     let available = available_kernel_interfaces(target)?;
+    if available.is_empty() {
+        return Err(missing_kernel_profile_error(
+            target,
+            &interface_bundle_root()?,
+        ));
+    }
     if manifest.profiles.is_empty() {
-        if available.is_empty() {
-            return Err(format!("目标 {target} 没有可用的内核 API Profile"));
-        }
         if available.len() > elm::ELM_EKI_MAX_VARIANTS {
             return Err(format!(
                 "目标 {target} 的可用 Profile 数量超过 EKI 上限 {}",
@@ -2018,6 +2021,23 @@ pub fn selected_kernel_interfaces(
         ));
     }
     Ok(selected)
+}
+
+fn missing_kernel_profile_error(target: &str, bundle_root: &Path) -> String {
+    format!(
+        concat!(
+            "目标 {target} 没有可用的内核 API Profile（搜索目录：{bundle_root}）\n",
+            "请先在 Hitoshizuku 内核仓库执行：\n",
+            "  cargo xtask modules --target {target}\n",
+            "从独立 ELM 工程调用时，请设置：\n",
+            "  export HITOSHIZUKU_KERNEL_ROOT=<内核仓库路径>\n",
+            "也可以直接设置 ELM_KERNEL_INTERFACE_ROOT=<接口包根目录>。\n",
+            "然后在当前工程执行：\n",
+            "  cargo elm sync ."
+        ),
+        target = target,
+        bundle_root = bundle_root.display()
+    )
 }
 
 pub fn activate_kernel_interface(
@@ -2123,7 +2143,9 @@ fn prepare_target_interface(project: &Path, target: &str) -> Result<(), String> 
         .into_iter()
         .next()
         .ok_or_else(|| {
-            format!("缺少目标 {target} 的内核 API Profile；先执行 cargo elm profile-export")
+            interface_bundle_root()
+                .map(|root| missing_kernel_profile_error(target, &root))
+                .unwrap_or_else(|error| error)
         })?;
     copy_target_interface(project, target, &bundle.root)?;
     install_lsp_source(project, &bundle.root, &bundle.manifest, false)
@@ -3293,6 +3315,18 @@ mod tests {
             interface_target_directory(directory.path(), "loongarch64-unknown-none"),
             full
         );
+    }
+
+    #[test]
+    fn missing_profile_error_contains_complete_recovery_steps() {
+        let root = Path::new("/tmp/hitoshizuku-interfaces");
+        let error = missing_kernel_profile_error("riscv64gc-unknown-none-elf", root);
+
+        assert!(error.contains("/tmp/hitoshizuku-interfaces"));
+        assert!(error.contains("cargo xtask modules --target riscv64gc-unknown-none-elf"));
+        assert!(error.contains("HITOSHIZUKU_KERNEL_ROOT"));
+        assert!(error.contains("ELM_KERNEL_INTERFACE_ROOT"));
+        assert!(error.contains("cargo elm sync ."));
     }
 
     #[test]
