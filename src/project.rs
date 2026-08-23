@@ -1908,7 +1908,7 @@ pub fn available_kernel_interfaces(target: &str) -> Result<Vec<KernelInterfaceBu
     {
         bundle_root
     } else {
-        bundle_root.join(target)
+        interface_target_directory(&bundle_root, target)
     };
     if !root.exists() {
         return Ok(Vec::new());
@@ -1953,6 +1953,26 @@ pub fn available_kernel_interfaces(target: &str) -> Result<Vec<KernelInterfaceBu
             .then_with(|| left.manifest.kernel_hash.cmp(&right.manifest.kernel_hash))
     });
     Ok(bundles)
+}
+
+/// Locate a target bundle in either the canonical Rust target-triple layout or
+/// the shorter architecture layout emitted by `xtask` (`riscv64` and
+/// `loongarch64`).  Older interface caches used the full triple, so both forms
+/// must remain readable when an ELM project is opened by rust-analyzer.
+fn interface_target_directory(bundle_root: &Path, target: &str) -> PathBuf {
+    let full = bundle_root.join(target);
+    if full.is_dir() {
+        return full;
+    }
+    let short_name = match target {
+        "riscv64gc-unknown-none-elf" => Some("riscv64"),
+        "loongarch64-unknown-none" => Some("loongarch64"),
+        _ => None,
+    };
+    short_name
+        .map(|name| bundle_root.join(name))
+        .filter(|path| path.is_dir())
+        .unwrap_or(full)
 }
 
 pub fn selected_kernel_interfaces(
@@ -3073,6 +3093,13 @@ fn elm_cargo_config(
         ]
     });
     let mut output = String::from("[build]\n");
+    if let Some(interface) = interface {
+        // LSP clients invoke `cargo check` without an explicit target.  The
+        // projected kernel sources only define the configured kernel
+        // architectures, so make the active Profile target the workspace
+        // default while keeping explicit build/test targets authoritative.
+        output.push_str(&format!("target = {:?}\n", interface.target));
+    }
     if !profile_flags.is_empty() {
         output.push_str("rustflags = [\n");
         append_toml_array(&mut output, &profile_flags);
@@ -3240,6 +3267,32 @@ mod tests {
             dependencies: Vec::new(),
             profiles: Vec::new(),
         }
+    }
+
+    #[test]
+    fn resolves_short_architecture_interface_directories() {
+        let directory = TestDirectory::new("interface-target-layout");
+        let short = directory.path().join("loongarch64");
+        fs::create_dir_all(&short).unwrap();
+
+        assert_eq!(
+            interface_target_directory(directory.path(), "loongarch64-unknown-none"),
+            short
+        );
+    }
+
+    #[test]
+    fn prefers_full_target_interface_directories() {
+        let directory = TestDirectory::new("interface-target-preference");
+        let full = directory.path().join("loongarch64-unknown-none");
+        let short = directory.path().join("loongarch64");
+        fs::create_dir_all(&full).unwrap();
+        fs::create_dir_all(&short).unwrap();
+
+        assert_eq!(
+            interface_target_directory(directory.path(), "loongarch64-unknown-none"),
+            full
+        );
     }
 
     #[test]
