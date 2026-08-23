@@ -14,6 +14,8 @@
   framework 和 Cargo 缓存。
 - `rust_metadata.rs`：解析 Rust section 中的 ELM 声明，整理导入、导出、provider、
   extension 和 kernel mixin 元数据。
+- `ui.rs`：Rust/Cargo 风格的彩色状态标签、帮助文本和交互式配置提示；支持
+  `--color`、`CARGO_TERM_COLOR` 和 `NO_COLOR`。
 - `kernel-api-crates.txt`：内核可被 ELM 引用的 crate 目录快照。它必须与锁定的内核
   revision 一起更新，不能单独扩展为任意 crate 搜索。
 

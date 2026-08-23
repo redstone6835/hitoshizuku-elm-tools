@@ -32,6 +32,29 @@ cargo elm profile-export build/loongarch64/kernel \
   --output build/elm-interface/loongarch64
 ```
 
+## 命令帮助和输出
+
+使用 Rust/Cargo 风格的帮助查看所有子命令、参数、默认值和可选值：
+
+```sh
+cargo elm --help
+cargo elm build --help
+cargo elm help image-bundle
+```
+
+终端输出默认自动启用颜色；可以显式选择颜色策略：
+
+```sh
+cargo elm --color auto build --help
+cargo elm --color always check . --arch riscv64
+cargo elm --color never doctor .
+```
+
+`--color` 可选 `auto`、`always`、`never`，也支持标准环境变量
+`CARGO_TERM_COLOR=auto|always|never`；`--no-color` 是 `--color never` 的快捷写法；设置
+`NO_COLOR` 会关闭自动颜色（显式 `--color always` 仍可强制开启）。`inspect` 的
+`key=value` 输出保持无装饰，适合脚本读取。
+
 接口包和模块构建必须使用同一内核提交；不要把接口工具的依赖升级到未验证的
 内核 revision。工具仓库内的 `src/kernel-api-crates.txt` 是接口目录快照，内核
 提交中的同名文件若发生变化，应随工具版本一起更新。

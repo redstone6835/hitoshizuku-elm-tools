@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -108,9 +108,23 @@ pub fn build_set(
                 manifest.name
             ));
         }
+        crate::ui::current().info(format!(
+            "构建模块 {}：mode={} target={} ({}/{})",
+            module.name,
+            mode.as_str(),
+            target,
+            order + 1,
+            ordered.len()
+        ));
         let mut command = Command::new(&executable);
         command
             .arg("elm")
+            .arg("--color")
+            .arg(if crate::ui::current().color_enabled() {
+                "always"
+            } else {
+                "never"
+            })
             .arg("build")
             .arg(&project)
             .arg("--arch")
@@ -167,6 +181,7 @@ pub fn build_set(
                     &destination,
                     &interface.manifest,
                 )?);
+                crate::ui::current().success(format!("模块 {} 已安装 EKI", module.name));
             }
             ElmBuildMode::Integrated => {
                 let source = project
@@ -184,6 +199,7 @@ pub fn build_set(
                     )
                 })?;
                 integrated.push(destination);
+                crate::ui::current().success(format!("模块 {} 已安装集成归档", module.name));
             }
             ElmBuildMode::Disabled => unreachable!(),
         }
@@ -488,12 +504,11 @@ pub fn configure_set(set_path: &Path, config_path: &Path, mode: ConfigMode) -> R
             ConfigMode::DefConfig => fallback,
             ConfigMode::OldConfig if existing.contains_key(&module.config) => fallback,
             ConfigMode::Config | ConfigMode::OldConfig => loop {
-                print!(
-                    "{} ({}) [y/m/n] ({}): ",
-                    module.prompt, module.config, fallback
-                );
-                io::stdout()
-                    .flush()
+                crate::ui::current()
+                    .prompt(&format!(
+                        "{} ({}) [y/m/n] ({}): ",
+                        module.prompt, module.config, fallback
+                    ))
                     .map_err(|err| format!("刷新配置提示失败: {err}"))?;
                 input.clear();
                 io::stdin()
@@ -504,7 +519,7 @@ pub fn configure_set(set_path: &Path, config_path: &Path, mode: ConfigMode) -> R
                 if matches!(answer, "y" | "m" | "n") {
                     break answer;
                 }
-                eprintln!("请输入 y、m 或 n");
+                crate::ui::current().warning("请输入 y、m 或 n");
             },
         };
         selected.insert(module.config.clone(), value.to_string());

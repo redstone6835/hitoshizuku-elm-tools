@@ -30,6 +30,7 @@ mod build_set;
 mod kernel_interface;
 mod project;
 mod rust_metadata;
+mod ui;
 
 use kernel_interface::{
     KernelInterfaceManifest, emit_kernel_symbol_probe, export_kernel_interface,
@@ -142,7 +143,7 @@ struct ElmApiSpec {
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("cargo elm: {err}");
+        ui::current().error(err);
         std::process::exit(1);
     }
 }
@@ -150,11 +151,58 @@ fn main() {
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     let command_index = usize::from(args.get(1).is_some_and(|argument| argument == "elm")) + 1;
-    let Some(command) = args.get(command_index).map(String::as_str) else {
+    let (color, cli_args) = parse_global_options(&args[command_index..])?;
+    ui::init(color);
+    if cli_args.is_empty() {
         usage();
-        return Err("缺少命令".to_string());
-    };
-    let command_args = &args[command_index + 1..];
+        return Err("缺少子命令；使用 `cargo elm --help` 查看可用命令".to_string());
+    }
+    if matches!(cli_args[0].as_str(), "-V" | "--version") {
+        println!("cargo-elm {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    let command = cli_args[0].as_str();
+    let command_args = &cli_args[1..];
+    if matches!(command, "-h" | "--help") {
+        usage();
+        return Ok(());
+    }
+    if command == "help" {
+        match command_args {
+            [] => {
+                usage();
+                return Ok(());
+            }
+            [flag] if matches!(flag.as_str(), "-h" | "--help") => {
+                usage();
+                return Ok(());
+            }
+            [name] => {
+                if ui::help(Some(name)) {
+                    return Ok(());
+                }
+                return Err(format!("未知子命令 {name:?}"));
+            }
+            [name, flag] if matches!(flag.as_str(), "-h" | "--help") => {
+                if ui::help(Some(name)) {
+                    return Ok(());
+                }
+                return Err(format!("未知子命令 {name:?}"));
+            }
+            _ => {
+                return Err("help 最多接受一个子命令；使用 `cargo elm help <子命令>`".to_string());
+            }
+        }
+    }
+    if command_args
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "-h" | "--help"))
+    {
+        if ui::help(Some(command)) {
+            return Ok(());
+        }
+        return Err(format!("未知子命令 {command:?}"));
+    }
     match command {
         "new" => cmd_new(command_args),
         "sync" => cmd_sync_framework(command_args),
@@ -175,37 +223,49 @@ fn run() -> Result<(), String> {
         "image-sign" => cmd_sign(command_args),
         "image-verify" => cmd_verify(command_args),
         "internal-fingerprint-header" => cmd_fingerprint_header(command_args),
-        "help" | "-h" | "--help" => {
-            usage();
-            Ok(())
+        other => {
+            ui::help(Some(other));
+            Err(format!("未知子命令 {other:?}"))
         }
-        other => Err(format!("未知命令: {other}")),
     }
 }
 
 fn usage() {
-    eprintln!("cargo elm 命令:");
-    eprintln!("  new <directory> --name <name> --kind <kind> --source <identifier>");
-    eprintln!("  sync [project-directory]");
-    eprintln!("  check [project-directory] --arch <riscv64|loongarch64|all>");
-    eprintln!("  test [project-directory]");
-    eprintln!("  doctor [project-directory]");
-    eprintln!(
-        "  profile-export <kernel-elf> --target <triple> --profile <id> [--cargo-profile <name>] --output <directory>"
-    );
-    eprintln!("  symbol-probe <interface-manifest> <output.rs>");
-    eprintln!(
-        "  build <project-directory> --arch <riscv64|loongarch64|all> --key <seed> --epoch <n>"
-    );
-    eprintln!("  build <project-directory> --arch <riscv64|loongarch64|all> --unsigned");
-    eprintln!(
-        "  build-set <Modules.toml> --config <.config> --target <triple> --output <directory> [--features <a,b>]"
-    );
-    eprintln!(
-        "  configure-set <Modules.toml> --config <.config> --mode <config|oldconfig|defconfig>"
-    );
-    eprintln!("  inspect <file.eki>");
-    eprintln!("  image-bundle <out.eki> --variant <profile-manifest> <image.eki> <priority> [...]");
+    ui::help(None);
+}
+
+fn parse_global_options(args: &[String]) -> Result<(ui::ColorChoice, Vec<String>), String> {
+    let mut color = ui::ColorChoice::from_environment();
+    let mut filtered = Vec::with_capacity(args.len());
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--color" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "--color 需要一个值：auto、always 或 never".to_string())?;
+                color = ui::ColorChoice::parse(value)?;
+                index += 2;
+            }
+            value if value.starts_with("--color=") => {
+                color = ui::ColorChoice::parse(&value[8..])?;
+                index += 1;
+            }
+            "--no-color" => {
+                color = ui::ColorChoice::Never;
+                index += 1;
+            }
+            "--" => {
+                filtered.extend_from_slice(&args[index + 1..]);
+                break;
+            }
+            value => {
+                filtered.push(value.to_string());
+                index += 1;
+            }
+        }
+    }
+    Ok((color, filtered))
 }
 
 fn cmd_new(args: &[String]) -> Result<(), String> {
@@ -221,7 +281,7 @@ fn cmd_new(args: &[String]) -> Result<(), String> {
         required_option(&options, "--kind")?,
         required_option(&options, "--source")?,
     )?;
-    println!("created ELM project: {}", directory.display());
+    ui::current().success(format!("已创建 ELM 工程：{}", directory.display()));
     Ok(())
 }
 
@@ -232,7 +292,7 @@ fn cmd_sync_framework(args: &[String]) -> Result<(), String> {
     }
     let project = args.first().map_or_else(|| Path::new("."), Path::new);
     sync_framework(project)?;
-    println!("ELM 工程已同步: {}", project.display());
+    ui::current().success(format!("ELM 工程已同步：{}", project.display()));
     Ok(())
 }
 
@@ -256,12 +316,12 @@ fn cmd_export_interface(args: &[String]) -> Result<(), String> {
     let repository = framework_source_root()?;
     let manifest =
         export_kernel_interface(&repository, target, profile, cargo_profile, kernel, output)?;
-    println!(
-        "exported kernel interface: target={} symbols={} output={}",
+    ui::current().success(format!(
+        "已导出内核接口：target={} symbols={} output={}",
         manifest.target,
         manifest.symbols.len(),
         output.display()
-    );
+    ));
     Ok(())
 }
 
@@ -271,10 +331,10 @@ fn cmd_emit_symbol_probe(args: &[String]) -> Result<(), String> {
         return Err("symbol-probe 参数无效".to_string());
     }
     let count = emit_kernel_symbol_probe(Path::new(&args[0]), Path::new(&args[1]))?;
-    println!(
-        "generated kernel symbol probe: symbols={count} output={}",
+    ui::current().success(format!(
+        "已生成内核符号探针：symbols={count} output={}",
         args[1]
-    );
+    ));
     Ok(())
 }
 
@@ -334,7 +394,7 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
             return Err("mode=n 不接受镜像签名参数".to_string());
         }
         remove_selected_build_artifacts(project, &manifest, targets)?;
-        println!("已跳过禁用组件: {}", manifest.name);
+        ui::current().warning(format!("已跳过禁用组件：{}", manifest.name));
         return Ok(());
     }
     if manifest.mode == ElmBuildMode::Integrated {
@@ -406,7 +466,7 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
         } else {
             write_variant_bundle(&output_path, &variants)?;
         }
-        println!("built {}", output_path.display());
+        ui::current().success(format!("已构建 {}", output_path.display()));
     }
     Ok(())
 }
@@ -449,11 +509,17 @@ fn cmd_build_set(args: &[String]) -> Result<(), String> {
         target.as_deref().ok_or("build-set 缺少 --target")?,
         output.as_deref().ok_or("build-set 缺少 --output")?,
         &features,
-    )
+    )?;
+    ui::current().success(format!(
+        "模块集合构建完成：{}",
+        output.expect("已校验 --output").display()
+    ));
+    Ok(())
 }
 
 fn cmd_configure_set(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
+        usage();
         return Err("configure-set 缺少 Modules.toml".to_string());
     }
     let set = Path::new(&args[0]);
@@ -465,7 +531,9 @@ fn cmd_configure_set(args: &[String]) -> Result<(), String> {
         "defconfig" => build_set::ConfigMode::DefConfig,
         value => return Err(format!("未知配置模式: {value}")),
     };
-    build_set::configure_set(set, config, mode)
+    build_set::configure_set(set, config, mode)?;
+    ui::current().success(format!("模块配置已写入：{}", config.display()));
+    Ok(())
 }
 
 fn parse_feature_list(value: &str) -> Result<Vec<String>, String> {
@@ -497,7 +565,7 @@ fn build_integrated_profiles(
         activate_kernel_interface(project, interface)?;
         let archive = cargo_build_integrated(project, target, &manifest.cargo_name())?;
         if interfaces.len() == 1 {
-            println!("built {}", archive.display());
+            ui::current().success(format!("已构建 {}", archive.display()));
             continue;
         }
         let profile = sanitize_file_component(&interface.manifest.profile);
@@ -517,7 +585,7 @@ fn build_integrated_profiles(
                 output.display()
             )
         })?;
-        println!("built {}", output.display());
+        ui::current().success(format!("已构建 {}", output.display()));
     }
     Ok(())
 }
@@ -579,7 +647,7 @@ fn cmd_check(args: &[String]) -> Result<(), String> {
     let (project, arch) = project_and_arch(args)?;
     let manifest = ElmProjectManifest::load(project)?;
     if manifest.mode == ElmBuildMode::Disabled {
-        println!("已跳过禁用组件检查: {}", manifest.name);
+        ui::current().warning(format!("已跳过禁用组件检查：{}", manifest.name));
         return Ok(());
     }
     sync_framework(project)?;
@@ -588,12 +656,12 @@ fn cmd_check(args: &[String]) -> Result<(), String> {
         for interface in selected_kernel_interfaces(&manifest, target)? {
             activate_kernel_interface(project, &interface)?;
             cargo_check(project, target, &manifest.cargo_name())?;
-            println!(
-                "检查通过: {} ({target}, profile={}, hash={})",
+            ui::current().success(format!(
+                "检查通过：{} ({target}, profile={}, hash={})",
                 project.display(),
                 interface.manifest.profile,
                 short_digest(&interface.manifest.interface_hash)
-            );
+            ));
         }
     }
     Ok(())
@@ -605,7 +673,7 @@ fn cmd_test(args: &[String]) -> Result<(), String> {
     }
     let project = args.first().map_or_else(|| Path::new("."), Path::new);
     cargo_test(project)?;
-    println!("开发侧测试通过: {}", project.display());
+    ui::current().success(format!("开发侧测试通过：{}", project.display()));
     Ok(())
 }
 
@@ -614,6 +682,7 @@ fn cmd_doctor(args: &[String]) -> Result<(), String> {
         return Err("doctor 最多接受一个工程目录".to_string());
     }
     let project = args.first().map_or_else(|| Path::new("."), Path::new);
+    ui::current().info(format!("开始诊断 ELM 工程：{}", project.display()));
     let report = diagnose_project(project)?;
     print!("{report}");
     Ok(())
@@ -711,7 +780,9 @@ fn cmd_fingerprint_header(args: &[String]) -> Result<(), String> {
     if let Some(parent) = std::path::Path::new(&args[1]).parent() {
         fs::create_dir_all(parent).map_err(|err| format!("create {}: {err}", parent.display()))?;
     }
-    fs::write(&args[1], header).map_err(|err| format!("write {}: {err}", args[1]))
+    fs::write(&args[1], header).map_err(|err| format!("write {}: {err}", args[1]))?;
+    ui::current().success(format!("已生成 fingerprint header：{}", args[1]));
+    Ok(())
 }
 
 fn append_c_byte_list(out: &mut String, bytes: &[u8]) {
@@ -753,6 +824,7 @@ fn cmd_pack_metadata(args: &[String]) -> Result<(), String> {
     }
     let image = eki_image_with_hash(ElmEbiArch::Any, &blocks);
     fs::write(out, image).map_err(|err| format!("write {out}: {err}"))?;
+    ui::current().success(format!("已生成 metadata EKI：{out}"));
     Ok(())
 }
 
@@ -765,7 +837,9 @@ fn cmd_pack_elf(args: &[String]) -> Result<(), String> {
         Path::new(&args[0]),
         Path::new(&args[1]),
         Path::new(&args[2]),
-    )
+    )?;
+    ui::current().success(format!("已生成 EKI：{}", args[2]));
+    Ok(())
 }
 
 fn cmd_bundle(args: &[String]) -> Result<(), String> {
@@ -811,11 +885,11 @@ fn cmd_bundle(args: &[String]) -> Result<(), String> {
         return Err("EKI 变体数量超过格式上限".to_string());
     }
     write_variant_bundle(output, &variants)?;
-    println!(
-        "已生成多变体 EKI: {} variants={}",
+    ui::current().success(format!(
+        "已生成多变体 EKI：{} variants={}",
         output.display(),
         variants.len()
-    );
+    ));
     Ok(())
 }
 
@@ -1146,6 +1220,7 @@ fn cmd_hash(args: &[String]) -> Result<(), String> {
     let mut bytes = fs::read(&args[0]).map_err(|err| format!("read {}: {err}", args[0]))?;
     rewrite_header_hash(&mut bytes)?;
     fs::write(&args[1], bytes).map_err(|err| format!("write {}: {err}", args[1]))?;
+    ui::current().success(format!("已更新 EKI hash：{}", args[1]));
     Ok(())
 }
 
@@ -1162,6 +1237,10 @@ fn cmd_keygen(args: &[String]) -> Result<(), String> {
     fs::write(&args[0], seed).map_err(|err| format!("write {}: {err}", args[0]))?;
     fs::write(&args[1], signing.verifying_key().to_bytes())
         .map_err(|err| format!("write {}: {err}", args[1]))?;
+    ui::current().success(format!(
+        "已生成 Ed25519 密钥：private={} public={}",
+        args[0], args[1]
+    ));
     Ok(())
 }
 
@@ -1185,6 +1264,7 @@ fn cmd_sign(args: &[String]) -> Result<(), String> {
         release_epoch,
     )?;
     fs::write(&args[1], output).map_err(|err| format!("write {}: {err}", args[1]))?;
+    ui::current().success(format!("已签名 EKI：{}", args[1]));
     Ok(())
 }
 
@@ -1219,7 +1299,7 @@ fn cmd_verify(args: &[String]) -> Result<(), String> {
     trust
         .verify(&image, proof, fingerprint)
         .map_err(|err| format!("signature verification failed: {err:?}"))?;
-    println!("verify: ok");
+    ui::current().success("EKI 验证通过");
     Ok(())
 }
 
@@ -2912,6 +2992,56 @@ fn copy_fixed(out: &mut [u8], offset: usize, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_global_color_options_without_changing_command_arguments() {
+        let args = vec![
+            "build".to_string(),
+            "project".to_string(),
+            "--color".to_string(),
+            "never".to_string(),
+            "--arch".to_string(),
+            "riscv64".to_string(),
+        ];
+
+        let (color, filtered) = parse_global_options(&args).unwrap();
+
+        assert_eq!(color, ui::ColorChoice::Never);
+        assert_eq!(
+            filtered,
+            vec![
+                "build".to_string(),
+                "project".to_string(),
+                "--arch".to_string(),
+                "riscv64".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_color_equals_and_no_color() {
+        let args = vec![
+            "--color=always".to_string(),
+            "--no-color".to_string(),
+            "doctor".to_string(),
+        ];
+
+        let (color, filtered) = parse_global_options(&args).unwrap();
+
+        assert_eq!(color, ui::ColorChoice::Never);
+        assert_eq!(filtered, vec!["doctor".to_string()]);
+    }
+
+    #[test]
+    fn rejects_invalid_color_mode() {
+        let args = vec!["--color".to_string(), "sometimes".to_string()];
+
+        let error = parse_global_options(&args).unwrap_err();
+
+        assert!(error.contains("auto"));
+        assert!(error.contains("always"));
+        assert!(error.contains("never"));
+    }
 
     fn relocation_fixture(relocation_type: u32) -> (ElfImage, Vec<u8>) {
         let elf = ElfImage {
