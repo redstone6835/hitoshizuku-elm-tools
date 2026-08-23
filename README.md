@@ -36,6 +36,14 @@ cargo elm profile-export build/loongarch64/kernel \
 内核 revision。工具仓库内的 `src/kernel-api-crates.txt` 是接口目录快照，内核
 提交中的同名文件若发生变化，应随工具版本一起更新。
 
+## 目录
+
+- [`src/README.md`](src/README.md)：命令入口、工程改写、接口导出和 build-set；
+- `src/kernel_interface.rs`：内核符号和 rlib metadata 处理；
+- `src/project.rs`：ELM 工程发现、临时 framework 和 manifest 保护；
+- `src/build_set.rs`：按 `Modules.toml` 解析并构建模块集合；
+- `src/rust_metadata.rs`：Rust crate 元数据和接口快照辅助。
+
 ## 许可
 
 GPLv3，见仓库根目录的 `LICENSE`。
