@@ -11,9 +11,10 @@
 - `kernel_interface.rs`：读取内核 API 目录、解析接口元数据、生成稳定的接口清单和
   符号探针。这里的接口格式属于内核与模块之间的契约，修改前需要同步内核文档。
 - `language_package.rs`：严格解析 `LanguagePackage.toml` 和 `LanguageBridge.toml`，
-  将 EKI Profile 转换为语言无关 `interface.schema.json`，并生成只包含显式 operation
-  描述、opaque 资源句柄和调用 trait 的 Rust bridge/SDK。它不会从 Rust ABI 文本猜测函数
-  签名，也不会生成任意函数指针。
+  将 EKI Profile 转换为语言无关 schema v2；验证固定类型图，生成稳定非零 `u64`
+  operation ID、Rust wire codec、通用 JSON descriptor、C header 和 Rust bridge，并
+  对真实 artifact 执行摘要/大小/签名校验。它不会从 Rust ABI 文本猜测函数签名，也不会
+  生成任意函数指针。
 - `build_set.rs`：解析模块集合和配置，计算依赖顺序，并为一组模块复用同一个接口、
   framework 和 Cargo 缓存。
 - `rust_metadata.rs`：解析 Rust section 中的 ELM 声明，整理导入、导出、provider、
@@ -32,6 +33,9 @@ cargo elm interface-schema build/elm-interface/riscv64/manifest.txt \
   --package LanguagePackage.toml \
   --adapters LanguageBridge.toml \
   --output interface.schema.json
+cargo elm descriptor build/elm-interface/riscv64/manifest.txt \
+  --package LanguagePackage.toml --adapters LanguageBridge.toml \
+  --output generated/descriptor
 cargo elm bridge build/elm-interface/riscv64/manifest.txt \
   --adapters LanguageBridge.toml --output generated/bridge.rs
 cargo elm sdk build/elm-interface/riscv64/manifest.txt \
@@ -40,10 +44,11 @@ cargo elm sdk build/elm-interface/riscv64/manifest.txt \
 cargo elm package-check .
 ```
 
-`LanguagePackage.toml`、`LanguageBridge.toml` 均使用严格字段校验；adapter 的每个
-`api_path` 必须在 EKI Profile 中存在，并明确请求类型、回复类型、ownership 和可选
-capability。生成代码只传递 operation ID、边界检查后的 byte buffer 和不透明资源句柄，
-不会把物理地址、裸指针或未经登记的 Rust 类型跨越 ELM 边界。
+`LanguagePackage.toml`、`LanguageBridge.toml` 均使用 schema v2 严格字段校验；未知字段、
+未知类型种类和旧 schema 会被拒绝。adapter 的每个 `api_path` 必须在 EKI Profile 中存在，
+并明确请求/回复固定布局、版本、ownership、字节上限和可选 capability。生成代码只传递
+`u64` operation ID、边界检查后的 byte buffer 和不透明资源句柄，不会把物理地址、裸指针
+或未经登记的 Rust 类型跨越 ELM 边界。格式细节见根目录 `LANGUAGE-PACKAGE.md`。
 
 ## 本地开发
 

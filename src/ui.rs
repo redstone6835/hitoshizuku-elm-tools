@@ -220,8 +220,8 @@ pub(crate) fn help(command: Option<&str>) -> bool {
         Some("interface-schema") => command_help(
             ui,
             "interface-schema",
-            "cargo elm interface-schema <manifest.txt> [--package <LanguagePackage.toml>] [--adapters <LanguageBridge.toml>] --output <interface.schema.json>",
-            "从 EKI 导出的 Kernel API Profile 生成语言无关接口 schema。未提供 adapter 时只输出完整符号目录。",
+            "cargo elm interface-schema <manifest.txt> [--package <LanguagePackage.toml>] --adapters <LanguageBridge.toml> --output <interface.schema.json>",
+            "从 EKI 导出的 Kernel API Profile 和严格类型图生成 schema v2。operation ID 是固定的非零 u64。",
             &[
                 ("<manifest.txt>", "profile-export 生成的内核接口清单。"),
                 (
@@ -230,16 +230,37 @@ pub(crate) fn help(command: Option<&str>) -> bool {
                 ),
                 (
                     "--adapters <LanguageBridge.toml>",
-                    "可选 adapter 注册表；每个 operation 必须对应 EKI 导出的 API。",
+                    "必选 adapter/IDL；声明固定类型布局，每个 operation 必须对应 EKI 导出的 API。",
                 ),
                 ("--output <interface.schema.json>", "必选 schema 输出路径。"),
+            ],
+        ),
+        Some("descriptor") => command_help(
+            ui,
+            "descriptor",
+            "cargo elm descriptor <manifest.txt> --package <LanguagePackage.toml> --adapters <LanguageBridge.toml> --output <目录>",
+            "生成语言无关 JSON descriptor、完整审计 schema 和使用 opaque byte layout 的 C header。",
+            &[
+                ("<manifest.txt>", "Kernel API Profile 接口清单。"),
+                (
+                    "--package <LanguagePackage.toml>",
+                    "必选 schema v2 语言包清单。",
+                ),
+                (
+                    "--adapters <LanguageBridge.toml>",
+                    "必选 schema v2 类型图和 operation 映射。",
+                ),
+                (
+                    "--output <目录>",
+                    "输出 interface.schema.json、interface.descriptor.json 和 interface.h。",
+                ),
             ],
         ),
         Some("sdk") => command_help(
             ui,
             "sdk",
             "cargo elm sdk <manifest.txt> --package <LanguagePackage.toml> --adapters <LanguageBridge.toml> --output <目录>",
-            "生成不依赖新语言 runtime 的 Rust SDK、资源句柄类型和接口 schema。",
+            "生成不依赖新语言 runtime 的 Rust 固定布局 codec，并同时输出通用 descriptor 和 C header。",
             &[
                 ("<manifest.txt>", "Kernel API Profile 接口清单。"),
                 ("--package <LanguagePackage.toml>", "必选语言包 manifest。"),
@@ -249,7 +270,7 @@ pub(crate) fn help(command: Option<&str>) -> bool {
                 ),
                 (
                     "--output <目录>",
-                    "必选；生成 lib.rs 和 interface.schema.json。",
+                    "必选；生成 lib.rs、两种 JSON descriptor 和 interface.h。",
                 ),
             ],
         ),
@@ -267,12 +288,18 @@ pub(crate) fn help(command: Option<&str>) -> bool {
         Some("package-check") => command_help(
             ui,
             "package-check",
-            "cargo elm package-check <语言包目录>",
-            "严格校验 LanguagePackage.toml、接口 schema 与 EKI 文件。",
-            &[(
-                "<语言包目录>",
-                "包含 LanguagePackage.toml、interface.schema.json 和 EKI 的目录。",
-            )],
+            "cargo elm package-check <语言包目录> [--trusted-key <公钥十六进制>]",
+            "严格校验 schema v2 清单、bridge、所有 artifact 的大小/摘要/签名以及 EKI。",
+            &[
+                (
+                    "<语言包目录>",
+                    "包含 LanguagePackage.toml 及其相对路径所引用 bridge、schema、EKI 和 artifact 的目录。",
+                ),
+                (
+                    "--trusted-key <公钥十六进制>",
+                    "可选的外部 Ed25519 信任根；提供后要求每个 artifact 使用该公钥签名。未提供时只做完整性和自签名校验，不证明发布者身份。",
+                ),
+            ],
         ),
         Some("build") => command_help(
             ui,
@@ -475,6 +502,7 @@ fn global_help(ui: &Ui) {
         "interface-schema",
         "从 EKI Profile 生成语言无关接口 schema。",
     );
+    ui.command("descriptor", "生成通用 JSON descriptor 和 C header。");
     ui.command("sdk", "生成 Rust SDK 和资源句柄类型。");
     ui.command("bridge", "生成语言无关 Rust ELM bridge。");
     ui.command("package-check", "校验 LanguagePackage 与其接口/EKI 文件。");

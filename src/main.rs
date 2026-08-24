@@ -217,6 +217,7 @@ fn run() -> Result<(), String> {
         "profile-export" => cmd_export_interface(command_args),
         "symbol-probe" => cmd_emit_symbol_probe(command_args),
         "interface-schema" => cmd_interface_schema(command_args),
+        "descriptor" => cmd_language_descriptor(command_args),
         "sdk" => cmd_language_sdk(command_args),
         "bridge" => cmd_language_bridge(command_args),
         "package-check" => cmd_language_package_check(command_args),
@@ -373,6 +374,24 @@ fn cmd_language_sdk(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn cmd_language_descriptor(args: &[String]) -> Result<(), String> {
+    if args.is_empty() {
+        usage();
+        return Err("descriptor 缺少接口 manifest".to_string());
+    }
+    let interface = Path::new(&args[0]);
+    let options = parse_named_options(&args[1..], &["--package", "--adapters", "--output"])?;
+    let package = Path::new(required_option(&options, "--package")?);
+    let adapters = Path::new(required_option(&options, "--adapters")?);
+    let output = Path::new(required_option(&options, "--output")?);
+    language_package::generate_common_descriptor(interface, package, adapters, output)?;
+    ui::current().success(format!(
+        "已生成通用 JSON descriptor 与 C header：{}",
+        output.display()
+    ));
+    Ok(())
+}
+
 fn cmd_language_bridge(args: &[String]) -> Result<(), String> {
     if args.is_empty() {
         usage();
@@ -388,11 +407,19 @@ fn cmd_language_bridge(args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_language_package_check(args: &[String]) -> Result<(), String> {
-    if args.len() != 1 {
+    if args.is_empty() {
         usage();
         return Err("package-check 需要一个 package 目录".to_string());
     }
-    language_package::check_language_package(Path::new(&args[0]))?;
+    let options = parse_named_options(&args[1..], &["--trusted-key"])?;
+    if let Some(trusted_key) = options.get("--trusted-key") {
+        language_package::check_language_package_with_trust(
+            Path::new(&args[0]),
+            Some(trusted_key),
+        )?;
+    } else {
+        language_package::check_language_package(Path::new(&args[0]))?;
+    }
     ui::current().success(format!("语言包校验通过：{}", args[0]));
     Ok(())
 }
