@@ -1561,7 +1561,7 @@ fn cargo_target_directory(project: &Path) -> PathBuf {
     }
 }
 
-fn archive_tool() -> &'static str {
+pub(crate) fn archive_tool() -> &'static str {
     if command_available("ar") {
         "ar"
     } else {

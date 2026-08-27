@@ -10,7 +10,8 @@ use elm::{
 
 use crate::kernel_interface::{KernelInterfaceManifest, hex_digest};
 use crate::project::{
-    ElmBuildMode, ElmProjectManifest, available_kernel_interfaces, publish_project_api,
+    ElmBuildMode, ElmProjectManifest, archive_tool, available_kernel_interfaces,
+    publish_project_api,
 };
 
 const MODULE_SET_MAGIC: &str = "ELM-MODULE-SET-V1";
@@ -205,6 +206,10 @@ pub fn build_set(
         }
     }
 
+    let deduplicated = deduplicate_integrated_archive_objects(&output, &integrated)?;
+    if deduplicated != 0 {
+        crate::ui::current().success(format!("集成归档已合并 {deduplicated} 个重复共享对象"));
+    }
     write_build_manifest(&output, target, &interface.manifest, &managed)?;
     write_integrated_archives(&output, &integrated)?;
     Ok(())
@@ -689,6 +694,120 @@ fn write_integrated_archives(output: &Path, archives: &[PathBuf]) -> Result<(), 
         .map_err(|err| format!("写入集成归档清单失败: {err}"))
 }
 
+/// Keep an object contributed by several integrated modules in the first
+/// archive that owns it. `--whole-archive` otherwise extracts every copy and
+/// turns a shared Rust dependency into duplicate global definitions.
+fn deduplicate_integrated_archive_objects(
+    output: &Path,
+    archives: &[PathBuf],
+) -> Result<usize, String> {
+    if archives.len() < 2 {
+        return Ok(0);
+    }
+
+    let temporary = output.join(format!(".integrated-dedup.tmp.{}", std::process::id()));
+    if temporary.exists() {
+        fs::remove_dir_all(&temporary)
+            .map_err(|err| format!("清理集成归档去重目录 {} 失败: {err}", temporary.display()))?;
+    }
+    fs::create_dir_all(&temporary)
+        .map_err(|err| format!("创建集成归档去重目录 {} 失败: {err}", temporary.display()))?;
+
+    let result = (|| {
+        let mut seen_objects = BTreeSet::<[u8; 32]>::new();
+        let mut duplicate_count = 0usize;
+        for (index, archive) in archives.iter().enumerate() {
+            let archive = archive
+                .canonicalize()
+                .map_err(|err| format!("定位集成归档 {} 失败: {err}", archive.display()))?;
+            let extract_dir = temporary.join(format!("archive-{index:04}"));
+            fs::create_dir_all(&extract_dir)
+                .map_err(|err| format!("创建 {} 失败: {err}", extract_dir.display()))?;
+            let extract = Command::new(archive_tool())
+                .current_dir(&extract_dir)
+                .arg("x")
+                .arg(&archive)
+                .output()
+                .map_err(|err| format!("解包集成归档 {} 失败: {err}", archive.display()))?;
+            if !extract.status.success() {
+                return Err(format!(
+                    "归档工具无法解包集成归档 {}: {}",
+                    archive.display(),
+                    String::from_utf8_lossy(&extract.stderr)
+                ));
+            }
+
+            let mut members = fs::read_dir(&extract_dir)
+                .map_err(|err| format!("读取 {} 失败: {err}", extract_dir.display()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| format!("读取集成归档成员失败: {err}"))?
+                .into_iter()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_file())
+                .collect::<Vec<_>>();
+            members.sort();
+
+            let mut object_count = 0usize;
+            let mut retained_objects = 0usize;
+            let mut retained = Vec::with_capacity(members.len());
+            let duplicate_before = duplicate_count;
+            for member in members {
+                if member.extension().is_some_and(|extension| extension == "o") {
+                    object_count += 1;
+                    let bytes = fs::read(&member).map_err(|err| {
+                        format!("读取集成归档对象 {} 失败: {err}", member.display())
+                    })?;
+                    if !seen_objects.insert(sha256(&bytes)) {
+                        duplicate_count += 1;
+                        continue;
+                    }
+                    retained_objects += 1;
+                }
+                retained.push(member);
+            }
+            if object_count == 0 {
+                return Err(format!("集成归档 {} 不包含目标对象", archive.display()));
+            }
+            if retained_objects == 0 {
+                return Err(format!(
+                    "集成归档 {} 没有独占目标对象；模块集合可能重复包含同一组件",
+                    archive.display()
+                ));
+            }
+            if duplicate_count == duplicate_before {
+                continue;
+            }
+
+            let rebuilt = temporary.join(format!("archive-{index:04}.a"));
+            let rebuild = Command::new(archive_tool())
+                .arg("crs")
+                .arg(&rebuilt)
+                .args(&retained)
+                .output()
+                .map_err(|err| format!("重建集成归档 {} 失败: {err}", archive.display()))?;
+            if !rebuild.status.success() {
+                return Err(format!(
+                    "归档工具无法重建集成归档 {}: {}",
+                    archive.display(),
+                    String::from_utf8_lossy(&rebuild.stderr)
+                ));
+            }
+            fs::rename(&rebuilt, &archive)
+                .map_err(|err| format!("安装去重后的集成归档 {} 失败: {err}", archive.display()))?;
+        }
+        Ok(duplicate_count)
+    })();
+
+    let cleanup = fs::remove_dir_all(&temporary)
+        .map_err(|err| format!("清理集成归档去重目录 {} 失败: {err}", temporary.display()));
+    match (result, cleanup) {
+        (Ok(count), Ok(())) => Ok(count),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(cleanup)) => Err(cleanup),
+        (Err(error), Err(cleanup)) => Err(format!("{error}；{cleanup}")),
+    }
+}
+
 fn target_arch_name(target: &str) -> Result<&'static str, String> {
     if target.starts_with("riscv64") {
         Ok("riscv64")
@@ -723,6 +842,70 @@ fn parse_string(value: &str, line: usize) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_DIRECTORY_ID: AtomicU64 = AtomicU64::new(1);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new(name: &str) -> Self {
+            let id = TEST_DIRECTORY_ID.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "cargo-elm-build-set-{name}-{}-{id}",
+                std::process::id()
+            ));
+            if path.exists() {
+                fs::remove_dir_all(&path).expect("remove stale test directory");
+            }
+            fs::create_dir_all(&path).expect("create test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn create_archive(root: &Path, name: &str, members: &[(&str, &[u8])]) -> PathBuf {
+        let source = root.join(format!("{name}.objects"));
+        fs::create_dir_all(&source).expect("create archive source");
+        let mut paths = Vec::new();
+        for (member, contents) in members {
+            let path = source.join(member);
+            fs::write(&path, contents).expect("write archive member");
+            paths.push(path);
+        }
+        let archive = root.join(format!("{name}.a"));
+        let output = Command::new(archive_tool())
+            .arg("crs")
+            .arg(&archive)
+            .args(&paths)
+            .output()
+            .expect("run archive tool");
+        assert!(
+            output.status.success(),
+            "archive tool failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        archive
+    }
+
+    fn archive_members(archive: &Path) -> Vec<String> {
+        let output = Command::new(archive_tool())
+            .arg("t")
+            .arg(archive)
+            .output()
+            .expect("list archive");
+        assert!(output.status.success());
+        String::from_utf8(output.stdout)
+            .expect("archive member names must be UTF-8")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
 
     fn module(name: &str, config: &str, depends: &[&str], after: &[&str]) -> ModuleSpec {
         ModuleSpec {
@@ -818,5 +1001,60 @@ mod tests {
                 requested
             );
         }
+    }
+
+    #[test]
+    fn integrated_archive_dedup_keeps_first_shared_object() {
+        let root = TestDirectory::new("archive-dedup");
+        let first = create_archive(
+            &root.0,
+            "first",
+            &[("first.o", b"first"), ("shared.o", b"shared")],
+        );
+        let second = create_archive(
+            &root.0,
+            "second",
+            &[("second.o", b"second"), ("shared.o", b"shared")],
+        );
+
+        assert_eq!(
+            deduplicate_integrated_archive_objects(&root.0, &[first.clone(), second.clone()])
+                .expect("deduplicate archives"),
+            1
+        );
+        assert_eq!(archive_members(&first), ["first.o", "shared.o"]);
+        assert_eq!(archive_members(&second), ["second.o"]);
+    }
+
+    #[test]
+    fn integrated_archive_dedup_preserves_distinct_objects_with_same_name() {
+        let root = TestDirectory::new("archive-distinct");
+        let first = create_archive(&root.0, "first", &[("shared.o", b"first body")]);
+        let second = create_archive(&root.0, "second", &[("shared.o", b"second body")]);
+
+        assert_eq!(
+            deduplicate_integrated_archive_objects(&root.0, &[first.clone(), second.clone()])
+                .expect("preserve distinct objects"),
+            0
+        );
+        assert_eq!(archive_members(&first), ["shared.o"]);
+        assert_eq!(archive_members(&second), ["shared.o"]);
+    }
+
+    #[test]
+    fn integrated_archive_dedup_leaves_single_archive_self_contained() {
+        let root = TestDirectory::new("archive-single");
+        let archive = create_archive(
+            &root.0,
+            "single",
+            &[("module.o", b"module"), ("dependency.o", b"dependency")],
+        );
+
+        assert_eq!(
+            deduplicate_integrated_archive_objects(&root.0, &[archive.clone()])
+                .expect("keep standalone archive"),
+            0
+        );
+        assert_eq!(archive_members(&archive), ["module.o", "dependency.o"]);
     }
 }
