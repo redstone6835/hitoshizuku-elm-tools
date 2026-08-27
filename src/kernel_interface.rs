@@ -2648,9 +2648,11 @@ fn rewrite_lsp_package_manifest(
     let package_name = manifest_package_name(&input)
         .ok_or_else(|| format!("{} 缺少 package name", manifest.display()))?;
     let projected_name = format!("elm-lsp-{package_name}");
+    let disable_build = build_requires_unprojected_dependency(manifest, &input, projected_names)?;
     let mut section = String::new();
     let mut skip_section = false;
     let mut renamed_package = false;
+    let mut build_setting_seen = package_build_setting_seen(&input);
     let mut output = Vec::new();
     for raw_line in input.lines() {
         let mut line = raw_line.to_string();
@@ -2660,7 +2662,8 @@ fn rewrite_lsp_package_manifest(
                 || matches!(
                     trimmed,
                     "[[bin]]" | "[[example]]" | "[[test]]" | "[[bench]]"
-                );
+                )
+                || disable_build && is_build_dependency_section(trimmed);
             section.clear();
             section.push_str(trimmed);
             if !skip_section {
@@ -2680,6 +2683,10 @@ fn rewrite_lsp_package_manifest(
                 output.push("autoexamples = false".to_string());
                 output.push("autotests = false".to_string());
                 output.push("autobenches = false".to_string());
+                if disable_build && !build_setting_seen {
+                    output.push("build = false".to_string());
+                    build_setting_seen = true;
+                }
                 continue;
             }
         } else if section == "[package]"
@@ -2689,6 +2696,14 @@ fn rewrite_lsp_package_manifest(
             )
         {
             continue;
+        } else if section == "[package]"
+            && line.trim_start().split_once('=').map(|(key, _)| key.trim()) == Some("build")
+        {
+            build_setting_seen = true;
+            if disable_build {
+                output.push("build = false".to_string());
+                continue;
+            }
         } else if is_dependency_section(&section) {
             if let Some((_, _, path)) = toml_string_field(&line, "path") {
                 let dependency = manifest
@@ -2729,6 +2744,58 @@ fn rewrite_lsp_package_manifest(
         .map_err(|error| format!("写入 LSP package {} 失败: {error}", manifest.display()))
 }
 
+fn build_requires_unprojected_dependency(
+    manifest: &Path,
+    input: &str,
+    projected_names: &BTreeMap<PathBuf, String>,
+) -> Result<bool, String> {
+    let mut section = String::new();
+    for raw_line in input.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            section.clear();
+            section.push_str(trimmed);
+            continue;
+        }
+        if !is_build_dependency_section(&section) {
+            continue;
+        }
+        let Some((_, _, path)) = toml_string_field(raw_line, "path") else {
+            continue;
+        };
+        let dependency = manifest.parent().unwrap().join(path);
+        let Ok(dependency) = dependency.canonicalize() else {
+            return Ok(true);
+        };
+        if !projected_names.contains_key(&dependency) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn package_build_setting_seen(input: &str) -> bool {
+    let mut section = String::new();
+    for raw_line in input.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            section.clear();
+            section.push_str(trimmed);
+            continue;
+        }
+        if section == "[package]"
+            && raw_line
+                .trim_start()
+                .split_once('=')
+                .map(|(key, _)| key.trim())
+                == Some("build")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn suppress_lsp_source_warnings(directory: &Path) -> Result<(), String> {
     let root = directory.join("src/lib.rs");
     if !root.is_file() {
@@ -2748,6 +2815,11 @@ fn is_dependency_section(section: &str) -> bool {
         || section == "[dev-dependencies]"
         || section == "[build-dependencies]"
         || section.starts_with("[target.") && section.ends_with(".dependencies]")
+}
+
+fn is_build_dependency_section(section: &str) -> bool {
+    section == "[build-dependencies]"
+        || section.starts_with("[target.") && section.ends_with(".build-dependencies]")
 }
 
 fn toml_string_field<'a>(line: &'a str, key: &str) -> Option<(usize, usize, &'a str)> {
@@ -3257,6 +3329,30 @@ mod tests {
                 .unwrap()
                 .starts_with("#![allow(warnings)]")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lsp_projection_disables_unprojected_build_dependencies() {
+        let root = std::env::temp_dir().join(format!(
+            "cargo-elm-lsp-build-dependency-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("alpha/src")).unwrap();
+        fs::write(
+            root.join("alpha/Cargo.toml"),
+            "[package]\nname = \"alpha\"\nversion = \"0.1.0\"\nedition = \"2024\"\nbuild = \"build.rs\"\n\n[build-dependencies]\nxtask = { path = \"../xtask\" }\n",
+        )
+        .unwrap();
+        fs::write(root.join("alpha/build.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("alpha/src/lib.rs"), "#![no_std]\n").unwrap();
+
+        project_lsp_package_manifests(&root, &["alpha".to_string()]).unwrap();
+        let alpha = fs::read_to_string(root.join("alpha/Cargo.toml")).unwrap();
+        assert!(alpha.contains("build = false"));
+        assert!(!alpha.contains("[build-dependencies]"));
+        assert!(!alpha.contains("../xtask"));
         fs::remove_dir_all(root).unwrap();
     }
 }
