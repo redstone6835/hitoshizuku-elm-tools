@@ -17,7 +17,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::{Expr, Ident, Item, LitInt, LitStr, ReturnType, Signature, Token, Type};
 
 const INTERFACE_MAGIC: &str = "ELM-KERNEL-INTERFACE-V1";
-const KERNEL_API_PROFILE_DOMAIN: &[u8] = b"ELM-KERNEL-API-PROFILE-V1\0";
+const KERNEL_API_PROFILE_DOMAIN: &[u8] = b"ELM-KERNEL-API-PROFILE-V2\0";
 const FRAMEWORK_DISTRIBUTION_DOMAIN: &[u8] = b"ELM-FRAMEWORK-DISTRIBUTION-V1\0";
 pub(crate) const KERNEL_API_BRIDGE_ABI_V1: u16 = 1;
 pub(crate) const KERNEL_API_MODE_EXACT_RUST: &str = "exact-rust";
@@ -279,7 +279,7 @@ impl KernelInterfaceManifest {
                 self.profile
             ));
         }
-        if kernel_api_profile_hash(&self.target, &self.profile, &self.symbols)
+        if kernel_api_profile_hash(&self.target, &self.profile, self.source_hash, &self.symbols)
             != self.interface_hash
         {
             return Err("内核 API Profile 摘要与符号清单不一致".to_string());
@@ -510,7 +510,7 @@ pub fn export_kernel_interface(
     let metadata_rlibs = exact_dependency_rlibs(&deps, &interface_rlibs, &kernel_dependencies)?;
     let public_api_abis = scan_repository_api_abis(repository, &symbols)?;
     populate_link_aliases(target, &interface_rlibs, &public_api_abis, &mut symbols)?;
-    let interface_hash = kernel_api_profile_hash(target, profile, &symbols);
+    let interface_hash = kernel_api_profile_hash(target, profile, source_hash, &symbols);
     for symbol in &mut symbols {
         symbol.interface_hash = interface_hash;
         symbol.rust_abi_hash = sha256(symbol.rust_abi.as_bytes());
@@ -1252,6 +1252,7 @@ fn eval_u64(expression: &Expr) -> Result<u64, String> {
 fn kernel_api_profile_hash(
     _target: &str,
     _profile: &str,
+    source_hash: [u8; 32],
     symbols: &[KernelInterfaceSymbol],
 ) -> [u8; 32] {
     let mut ordered = symbols.iter().collect::<Vec<_>>();
@@ -1264,6 +1265,7 @@ fn kernel_api_profile_hash(
     let mut hash = Sha256::new();
     hash.update(KERNEL_API_PROFILE_DOMAIN);
     hash.update(&KERNEL_API_BRIDGE_ABI_V1.to_le_bytes());
+    hash.update(&source_hash);
     hash.update(&(ordered.len() as u64).to_le_bytes());
     for symbol in ordered {
         hash.update(&[symbol.kind]);
