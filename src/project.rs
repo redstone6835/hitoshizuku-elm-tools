@@ -9,7 +9,7 @@ use elm::Sha256;
 use crate::kernel_interface::{
     KernelInterfaceManifest, LSP_SOURCE_IDENTITY_FILE, LSP_SOURCE_MAGIC, hex_digest,
     kernel_api_crates, kernel_api_host_alias, metadata_facade_manifest, metadata_facade_source,
-    packaged_framework_hash,
+    packaged_framework_hash, workspace_lints_from_manifest,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,7 +449,7 @@ pub fn sync_framework(project: &Path) -> Result<(), String> {
         }
         fs::write(
             temporary.join("Cargo.toml"),
-            crate::kernel_interface::framework_workspace_manifest(),
+            crate::kernel_interface::framework_workspace_manifest(&source)?,
         )
         .map_err(|err| format!("写入框架 workspace manifest 失败: {err}"))?;
     }
@@ -514,14 +514,23 @@ fn has_elm_framework_dependencies(input: &str) -> bool {
     input.contains(".elm/framework/")
 }
 
-fn framework_manifest_source(input: &str) -> String {
+fn framework_manifest_source(input: &str, workspace_lints: &str) -> String {
     let mut output = input.to_string();
     // 驱动同时属于根 workspace；将本次 ELM 调用隔离，避免 Cargo 合并 facade
     // 与根 workspace 中同名的源码包。
     if !output.lines().any(|line| line.trim() == "[workspace]") {
         output = format!(
-            "[workspace]\nresolver = \"2\"\n\n[workspace.package]\nversion = \"0.1.0\"\nedition = \"2024\"\n\n{output}"
+            "[workspace]\nresolver = \"2\"\n\n[workspace.package]\nversion = \"0.1.0\"\nedition = \"2024\"\n\n{workspace_lints}\n{output}"
         );
+    } else if !output.lines().any(|line| {
+        let line = line.trim();
+        line == "[workspace.lints]" || line.starts_with("[workspace.lints.")
+    }) {
+        if !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push('\n');
+        output.push_str(workspace_lints);
     }
     output
 }
@@ -801,6 +810,7 @@ where
     let mut changed = Vec::new();
     if has_kernel_source_dependencies(&root_source) {
         let repository = framework_source_root()?;
+        let workspace_lints = workspace_lints_from_manifest(&repository.join("Cargo.toml"))?;
         for path in reachable_cargo_manifests(project, &repository)? {
             let original = fs::read_to_string(&path)
                 .map_err(|err| format!("读取 {} 失败: {err}", path.display()))?;
@@ -810,7 +820,7 @@ where
             let rewritten =
                 rewrite_kernel_manifest_paths(&original, manifest_dir, &repository, &framework)?;
             let rewritten = if path == root_manifest {
-                framework_manifest_source(&rewritten)
+                framework_manifest_source(&rewritten, &workspace_lints)
             } else {
                 rewritten
             };
@@ -820,7 +830,8 @@ where
             }
         }
     } else {
-        let rewritten = framework_manifest_source(&root_source);
+        let workspace_lints = workspace_lints_from_manifest(&framework.join("Cargo.toml"))?;
+        let rewritten = framework_manifest_source(&root_source, &workspace_lints);
         if rewritten != root_source {
             originals.push((root_manifest.clone(), root_source));
             changed.push((root_manifest, rewritten));
@@ -3623,12 +3634,14 @@ edition = "2024"
 
 [dependencies]
 acpi = { path = "../../libs/acpi", default-features = false }
-"#;
+        "#;
         let original = source.to_string();
-        let temporary = framework_manifest_source(source);
+        let workspace_lints = "[workspace.lints.rust]\nunsafe_code = \"warn\"\n";
+        let temporary = framework_manifest_source(source, workspace_lints);
 
         assert_eq!(source, original);
         assert!(temporary.starts_with("[workspace]\nresolver = \"2\""));
+        assert!(temporary.contains(workspace_lints));
         assert!(temporary.ends_with(source));
         assert!(!source.contains("[workspace]"));
         assert!(!source.contains(".elm/framework/"));
@@ -3664,6 +3677,44 @@ acpi = { path = ".elm/framework/acpi", default-features = false }
                 .path()
                 .join(".elm/.cargo-elm-manifest.lock")
                 .exists()
+        );
+    }
+
+    #[test]
+    fn temporary_workspace_allows_package_lint_inheritance() {
+        let directory = TestDirectory::new("workspace-lint-inheritance");
+        let manifest = directory.path().join("Cargo.toml");
+        fs::create_dir_all(directory.path().join("src")).unwrap();
+        fs::write(directory.path().join("src/lib.rs"), "#![no_std]\n").unwrap();
+        let package = r#"[lints]
+workspace = true
+
+[package]
+name = "lint-inheritance"
+version = "0.1.0"
+edition = "2024"
+"#;
+        let workspace_lints = r#"[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(elm_integrated_phase, values("device", "runtime"))'] }
+"#;
+        fs::write(
+            &manifest,
+            framework_manifest_source(package, workspace_lints),
+        )
+        .unwrap();
+
+        let output = Command::new("cargo")
+            .arg("metadata")
+            .arg("--no-deps")
+            .arg("--format-version=1")
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

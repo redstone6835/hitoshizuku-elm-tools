@@ -665,7 +665,7 @@ fn framework_distribution_hash(repository: &Path) -> Result<[u8; 32], String> {
     }
     files.push((
         "Cargo.toml".to_string(),
-        framework_workspace_manifest().as_bytes().to_vec(),
+        framework_workspace_manifest(repository)?.into_bytes(),
     ));
     Ok(hash_framework_distribution(files))
 }
@@ -2420,7 +2420,7 @@ fn copy_framework(
     }
     fs::write(
         destination.join("Cargo.toml"),
-        framework_workspace_manifest(),
+        framework_workspace_manifest(repository)?,
     )
     .map_err(|error| format!("写入框架 workspace manifest 失败: {error}"))
 }
@@ -2528,7 +2528,67 @@ static ELM_GLOBAL_ALLOCATOR: ElmGlobalAllocator = ElmGlobalAllocator;
     )
 }
 
-pub(crate) fn framework_workspace_manifest() -> String {
+const EMPTY_WORKSPACE_LINTS_MANIFEST: &str = "[workspace.lints]\n";
+
+pub(crate) fn workspace_lints_from_manifest(manifest: &Path) -> Result<String, String> {
+    let input = match fs::read_to_string(manifest) {
+        Ok(input) => input,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(EMPTY_WORKSPACE_LINTS_MANIFEST.to_string());
+        }
+        Err(error) => {
+            return Err(format!(
+                "读取 workspace manifest {} 失败: {error}",
+                manifest.display()
+            ));
+        }
+    };
+    workspace_lints_from_source(&input).map_err(|error| {
+        format!(
+            "解析 workspace manifest {} 失败: {error}",
+            manifest.display()
+        )
+    })
+}
+
+fn workspace_lints_from_source(input: &str) -> Result<String, String> {
+    let document = input
+        .parse::<toml::Table>()
+        .map_err(|error| format!("Cargo.toml 不是有效 TOML: {error}"))?;
+    let lints = document
+        .get("workspace")
+        .and_then(toml::Value::as_table)
+        .and_then(|workspace| workspace.get("lints"))
+        .cloned()
+        .unwrap_or_else(|| toml::Value::Table(toml::Table::new()));
+    if !lints.is_table() {
+        return Err("workspace.lints 必须是 TOML 表".to_string());
+    }
+
+    let mut workspace = toml::Table::new();
+    workspace.insert("lints".to_string(), lints);
+    let mut root = toml::Table::new();
+    root.insert("workspace".to_string(), toml::Value::Table(workspace));
+    let mut output =
+        toml::to_string(&root).map_err(|error| format!("序列化 workspace.lints 失败: {error}"))?;
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    Ok(output)
+}
+
+fn repository_workspace_lints(repository: &Path) -> Result<String, String> {
+    let manifest = repository.join("Cargo.toml");
+    if !manifest.is_file() {
+        return Err(format!(
+            "内核仓库缺少 workspace manifest: {}",
+            manifest.display()
+        ));
+    }
+    workspace_lints_from_manifest(&manifest)
+}
+
+pub(crate) fn framework_workspace_manifest(repository: &Path) -> Result<String, String> {
     let mut output = String::from(
         "[workspace]\nresolver = \"2\"\nmembers = [\n    \"elm\",\n    \"elm/macros\",\n    \"kernel-symbols\",\n    \"kernel-symbols/macros\",\n",
     );
@@ -2536,7 +2596,9 @@ pub(crate) fn framework_workspace_manifest() -> String {
         writeln!(output, "    {:?},", spec.name).expect("写入 String 不会失败");
     }
     output.push_str("]\n\n[workspace.package]\nversion = \"0.1.0\"\nedition = \"2024\"\n");
-    output
+    output.push('\n');
+    output.push_str(&repository_workspace_lints(repository)?);
+    Ok(output)
 }
 
 fn copy_lsp_source_snapshot(
@@ -2557,6 +2619,8 @@ fn copy_lsp_source_snapshot(
             .map_err(|_| "生成 LSP 源码 workspace 失败".to_string())?;
     }
     workspace.push_str("]\n\n[workspace.package]\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+    workspace.push('\n');
+    workspace.push_str(&repository_workspace_lints(repository)?);
     fs::write(destination.join("Cargo.toml"), workspace)
         .map_err(|error| format!("写入 LSP 源码 workspace 失败: {error}"))?;
     if repository.join("Cargo.lock").is_file() {
@@ -3080,7 +3144,19 @@ mod tests {
 
     #[test]
     fn framework_is_an_independent_nested_workspace() {
-        let manifest = framework_workspace_manifest();
+        let repository = std::env::temp_dir().join(format!(
+            "cargo-elm-framework-workspace-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&repository);
+        fs::create_dir_all(&repository).unwrap();
+        fs::write(
+            repository.join("Cargo.toml"),
+            "[workspace]\n\n[workspace.lints.rust]\nunsafe_code = \"warn\"\n",
+        )
+        .unwrap();
+
+        let manifest = framework_workspace_manifest(&repository).unwrap();
         assert!(manifest.contains("\"elm\""));
         assert!(manifest.contains("\"kernel-symbols\""));
         assert!(manifest.contains("\"allocator\""));
@@ -3090,6 +3166,56 @@ mod tests {
         assert!(manifest.contains("\"hal\""));
         assert!(manifest.contains("\"net\""));
         assert!(manifest.contains("[workspace.package]"));
+        assert!(manifest.contains("[workspace.lints.rust]"));
+        assert!(manifest.contains("unsafe_code = \"warn\""));
+        fs::remove_dir_all(repository).unwrap();
+    }
+
+    #[test]
+    fn workspace_lints_preserve_complete_nested_configuration() {
+        let source = r#"
+[workspace]
+members = ["driver"]
+
+[workspace.package]
+edition = "2024"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(elm_integrated_phase, values("device", "runtime"))'] }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+[profile.release]
+panic = "abort"
+"#;
+        let projected = workspace_lints_from_source(source).unwrap();
+        let document = projected.parse::<toml::Table>().unwrap();
+        let workspace = document["workspace"].as_table().unwrap();
+        let lints = workspace["lints"].as_table().unwrap();
+
+        assert_eq!(lints["rust"]["unsafe_code"].as_str(), Some("warn"));
+        assert_eq!(
+            lints["rust"]["unexpected_cfgs"]["level"].as_str(),
+            Some("warn")
+        );
+        assert_eq!(
+            lints["rust"]["unexpected_cfgs"]["check-cfg"][0].as_str(),
+            Some("cfg(elm_integrated_phase, values(\"device\", \"runtime\"))")
+        );
+        assert_eq!(
+            lints["clippy"]["pedantic"]["priority"].as_integer(),
+            Some(-1)
+        );
+        assert!(!document.contains_key("package"));
+        assert!(!document.contains_key("profile"));
+    }
+
+    #[test]
+    fn missing_workspace_lints_produce_an_inheritable_empty_table() {
+        let projected = workspace_lints_from_source("[workspace]\n").unwrap();
+        assert_eq!(projected, EMPTY_WORKSPACE_LINTS_MANIFEST);
     }
 
     #[test]
