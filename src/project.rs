@@ -566,7 +566,12 @@ fn rewrite_kernel_manifest_paths(
     framework: &Path,
 ) -> Result<String, String> {
     let shared_framework = std::env::var_os("ELM_SHARED_FRAMEWORK_ROOT").is_some();
-    let mut sources = Vec::with_capacity(kernel_api_crates().len() + 1);
+    // `kernel-symbols` is the ABI contract crate used by every kernel API
+    // crate, but it is intentionally not part of `kernel-api-crates.txt`:
+    // that file describes crates whose metadata is exported to ELM modules.
+    // It still needs the same path rewrite, otherwise a module gets both the
+    // framework copy and the kernel workspace copy in one Cargo graph.
+    let mut sources = Vec::with_capacity(kernel_api_crates().len() + 2);
     for spec in kernel_api_crates() {
         let source = repository
             .join(spec.repository_path)
@@ -584,6 +589,25 @@ fn rewrite_kernel_manifest_paths(
         };
         sources.push((source, spec.name, replacement));
     }
+    let kernel_symbols_source = repository
+        .join("libs/kernel-symbols")
+        .canonicalize()
+        .map_err(|err| format!("定位内核 crate libs/kernel-symbols 失败: {err}"))?;
+    let kernel_symbols_facade = framework.join("kernel-symbols");
+    let kernel_symbols_replacement = if shared_framework {
+        kernel_symbols_facade
+            .canonicalize()
+            .map_err(|err| format!("定位共享 framework kernel-symbols 失败: {err}"))?
+            .to_string_lossy()
+            .replace('\\', "/")
+    } else {
+        relative_path(manifest_dir, &kernel_symbols_facade)?
+    };
+    sources.push((
+        kernel_symbols_source,
+        "kernel-symbols",
+        kernel_symbols_replacement,
+    ));
     // `elm` 不在 kernel-api-crates.txt 的 ABI facade 列表中，但 ELM 模块
     // 仍必须使用接口包中的同一份 crate，否则每个模块会重新编译它。
     let elm_source = repository
@@ -645,10 +669,16 @@ fn rewrite_kernel_manifest_paths(
 
 fn path_dependency_manifests(manifest: &Path, input: &str, repository: &Path) -> Vec<PathBuf> {
     let manifest_dir = manifest.parent().unwrap_or_else(|| Path::new("."));
-    let kernel_sources = kernel_api_crates()
+    let mut kernel_sources = kernel_api_crates()
         .iter()
         .filter_map(|spec| repository.join(spec.repository_path).canonicalize().ok())
         .collect::<BTreeSet<_>>();
+    // Keep the contract crate out of recursive source-manifest traversal. It
+    // is replaced with the framework package by
+    // `rewrite_kernel_manifest_paths`, just like the exported API crates.
+    if let Ok(kernel_symbols) = repository.join("libs/kernel-symbols").canonicalize() {
+        kernel_sources.insert(kernel_symbols);
+    }
     let mut dependencies = BTreeSet::new();
     let mut cursor = 0;
     while let Some(found) = input[cursor..].find("path = \"") {
@@ -3454,8 +3484,10 @@ allocator = { path = "../../../libs/allocator", default-features = false }
         let external = TestDirectory::new("path-dependency-external");
         let project = repository.path().join("project");
         let internal = repository.path().join("internal");
+        let kernel_symbols = repository.path().join("libs/kernel-symbols");
         fs::create_dir_all(&project).unwrap();
         fs::create_dir_all(&internal).unwrap();
+        fs::create_dir_all(&kernel_symbols).unwrap();
         fs::write(
             project.join("Cargo.toml"),
             "[package]\nname = \"project\"\n",
@@ -3467,19 +3499,51 @@ allocator = { path = "../../../libs/allocator", default-features = false }
         )
         .unwrap();
         fs::write(
+            kernel_symbols.join("Cargo.toml"),
+            "[package]\nname = \"kernel-symbols\"\n",
+        )
+        .unwrap();
+        fs::write(
             external.path().join("Cargo.toml"),
             "[package]\nname = \"external\"\n",
         )
         .unwrap();
         let input = format!(
-            "[dependencies]\ninternal = {{ path = {:?} }}\nexternal = {{ path = {:?} }}\n",
+            "[dependencies]\ninternal = {{ path = {:?} }}\nkernel-symbols = {{ path = {:?} }}\nexternal = {{ path = {:?} }}\n",
             internal,
+            kernel_symbols,
             external.path(),
         );
         let repository = repository.path().canonicalize().unwrap();
         let dependencies =
             path_dependency_manifests(&project.join("Cargo.toml"), &input, &repository);
         assert_eq!(dependencies, vec![internal.join("Cargo.toml")]);
+    }
+
+    #[test]
+    fn rewrites_kernel_symbols_to_the_framework_copy() {
+        let directory = TestDirectory::new("kernel-symbols-framework-path");
+        let repository = directory.path().join("repository");
+        let project = repository.join("drivers/demo");
+        let framework = directory.path().join("framework");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(repository.join("libs/kernel-symbols")).unwrap();
+        fs::create_dir_all(repository.join("libs/elm")).unwrap();
+        fs::create_dir_all(framework.join("kernel-symbols")).unwrap();
+        fs::create_dir_all(framework.join("elm")).unwrap();
+        for spec in kernel_api_crates() {
+            fs::create_dir_all(repository.join(spec.repository_path)).unwrap();
+            fs::create_dir_all(framework.join(spec.name)).unwrap();
+        }
+
+        let source = "[dependencies]\nkernel-symbols = { path = \"../../libs/kernel-symbols\" }\nallocator = { path = \"../../libs/allocator\" }\n";
+        let rewritten =
+            rewrite_kernel_manifest_paths(source, &project, &repository, &framework).unwrap();
+
+        assert!(!rewritten.contains("../../libs/kernel-symbols"));
+        assert!(rewritten.contains("framework/kernel-symbols"));
+        assert!(!rewritten.contains("../../libs/allocator"));
+        assert!(rewritten.contains("framework/allocator"));
     }
 
     #[test]
