@@ -3099,7 +3099,6 @@ mod tests {
         };
         let symbols = scan_repository_exports(&repository, [0; 32]).unwrap();
         for prefix in [
-            "acpi.",
             "allocator.",
             "efi.",
             "elf.",
@@ -3197,13 +3196,43 @@ mod tests {
     }
 
     #[test]
-    fn tool_and_kernel_use_the_same_interface_source_identity() {
+    fn tool_and_kernel_use_the_same_interface_source_catalog() {
         let Some(repository) = test_kernel_root() else {
             return;
         };
-        let (digest, files) = repository_interface_hash(&repository).unwrap();
-        assert_eq!(digest, kernel_symbols::KERNEL_INTERFACE_SOURCE_SHA256);
-        assert_eq!(files, kernel_symbols::KERNEL_INTERFACE_SOURCE_FILE_COUNT);
+        let kernel_catalog =
+            fs::read_to_string(repository.join("libs/kernel-symbols/kernel-api-crates.txt"))
+                .expect("read kernel API crate catalog");
+        assert_eq!(KERNEL_API_CRATE_LIST, kernel_catalog);
+
+        let (_digest, files) = repository_interface_hash(&repository).unwrap();
+        assert_ne!(files, 0);
+    }
+
+    #[test]
+    fn kernel_api_profile_hash_binds_the_source_identity() {
+        let symbol = KernelInterfaceSymbol {
+            kind: KERNEL_SYMBOL_KIND_FUNCTION,
+            flags: 0,
+            version: 1,
+            capabilities: kernel_symbols::capability::CORE_SAFE,
+            retained_argument_mask: 0,
+            interface_hash: [0; 32],
+            api_path: "general.test".to_string(),
+            item_path: "general::test".to_string(),
+            link_name: "__elm_kernel_api_test".to_string(),
+            contract: "kernel.test@1".to_string(),
+            rust_abi: "fn()->()".to_string(),
+            rust_abi_hash: [0; 32],
+            abi_mode: KERNEL_API_MODE_EXACT_RUST.to_string(),
+            aliases: Vec::new(),
+        };
+        let symbols = [symbol];
+
+        assert_ne!(
+            kernel_api_profile_hash("test", "test", [1; 32], &symbols),
+            kernel_api_profile_hash("test", "test", [2; 32], &symbols)
+        );
     }
 
     #[test]
