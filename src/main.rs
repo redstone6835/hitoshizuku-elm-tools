@@ -89,9 +89,12 @@ const ELF_TYPE_DYN: u16 = 3;
 const ELF_SECTION_RELA: u32 = 4;
 const ELF_SECTION_REL: u32 = 9;
 const ELF_SECTION_FLAG_ALLOC: u64 = 1 << 1;
-const ELF_RELOCATION_RELATIVE: u32 = 3;
-const ELF_RELOCATION_ABS64: u32 = 2;
-const ELF_RELOCATION_JUMP_SLOT: u32 = 5;
+const ELF_GENERIC_RELOCATION_RELATIVE: u32 = 3;
+const ELF_GENERIC_RELOCATION_ABS64: u32 = 2;
+const ELF_GENERIC_RELOCATION_JUMP_SLOT: u32 = 5;
+const ELF_X86_64_RELOCATION_RELATIVE: u32 = 8;
+const ELF_X86_64_RELOCATION_ABS64: u32 = 1;
+const ELF_X86_64_RELOCATION_JUMP_SLOT: u32 = 7;
 const ELF_SYMBOL_TABLE: u32 = 2;
 const ELF_SYMBOL_BIND_GLOBAL: u8 = 1;
 const ELF_SYMBOL_TYPE_OBJECT: u8 = 1;
@@ -2829,6 +2832,7 @@ fn dynamic_runtime_relocations(
     interface: &KernelInterfaceManifest,
     imports: &mut Vec<ImportSpec>,
 ) -> Result<Vec<EkiRelocationSpec>, String> {
+    let relocation_types = dynamic_relocation_types(elf.arch);
     let mut records = Vec::new();
     for section in &elf.sections {
         if section.flags & ELF_SECTION_FLAG_ALLOC == 0
@@ -2855,7 +2859,7 @@ fn dynamic_runtime_relocations(
             let relocation_type = info as u32;
             let symbol_index = (info >> 32) as u32;
             let (target_segment_index, target_offset) = elf.relocation_target(target_vaddr, 8)?;
-            if relocation_type == ELF_RELOCATION_RELATIVE && symbol_index == 0 {
+            if relocation_type == relocation_types.relative && symbol_index == 0 {
                 if target_vaddr & 7 != 0 || addend < 0 || !elf.contains_image_address(addend as u64)
                 {
                     return Err(format!(
@@ -2873,7 +2877,7 @@ fn dynamic_runtime_relocations(
             }
             if !matches!(
                 relocation_type,
-                ELF_RELOCATION_ABS64 | ELF_RELOCATION_JUMP_SLOT
+                value if value == relocation_types.abs64 || value == relocation_types.jump_slot
             ) || symbol_index == 0
             {
                 return Err(format!(
@@ -2958,6 +2962,7 @@ fn dynamic_relative_relocations(
     elf: &ElfImage,
     bytes: &[u8],
 ) -> Result<Vec<EkiRelocationSpec>, String> {
+    let relocation_types = dynamic_relocation_types(elf.arch);
     let mut records = Vec::new();
     let mut found_dynamic_relocations = false;
     for section in &elf.sections {
@@ -2986,7 +2991,7 @@ fn dynamic_relative_relocations(
             let addend = read_i64(bytes, offset + 16)?;
             let relocation_type = info as u32;
             let symbol_index = (info >> 32) as u32;
-            if relocation_type != ELF_RELOCATION_RELATIVE || symbol_index != 0 {
+            if relocation_type != relocation_types.relative || symbol_index != 0 {
                 return Err(format!(
                     "ELM PIE 只允许无符号 R_*_RELATIVE，发现 type={relocation_type} symbol={symbol_index}"
                 ));
@@ -3007,6 +3012,28 @@ fn dynamic_relative_relocations(
         }
     }
     Ok(records)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DynamicRelocationTypes {
+    relative: u32,
+    abs64: u32,
+    jump_slot: u32,
+}
+
+const fn dynamic_relocation_types(arch: ElmEbiArch) -> DynamicRelocationTypes {
+    match arch {
+        ElmEbiArch::X86_64 => DynamicRelocationTypes {
+            relative: ELF_X86_64_RELOCATION_RELATIVE,
+            abs64: ELF_X86_64_RELOCATION_ABS64,
+            jump_slot: ELF_X86_64_RELOCATION_JUMP_SLOT,
+        },
+        ElmEbiArch::Riscv64 | ElmEbiArch::LoongArch64 | ElmEbiArch::Any => DynamicRelocationTypes {
+            relative: ELF_GENERIC_RELOCATION_RELATIVE,
+            abs64: ELF_GENERIC_RELOCATION_ABS64,
+            jump_slot: ELF_GENERIC_RELOCATION_JUMP_SLOT,
+        },
+    }
 }
 
 fn parse_kind(raw: &str) -> Result<ElmKind, String> {
@@ -3152,9 +3179,9 @@ mod tests {
         );
     }
 
-    fn relocation_fixture(relocation_type: u32) -> (ElfImage, Vec<u8>) {
+    fn relocation_fixture(arch: ElmEbiArch, relocation_type: u32) -> (ElfImage, Vec<u8>) {
         let elf = ElfImage {
-            arch: ElmEbiArch::LoongArch64,
+            arch,
             load_segments: vec![
                 ElfLoadSegment {
                     index: 0,
@@ -3197,7 +3224,8 @@ mod tests {
 
     #[test]
     fn converts_elf_relative_relocation_to_image_base() {
-        let (elf, bytes) = relocation_fixture(ELF_RELOCATION_RELATIVE);
+        let (elf, bytes) =
+            relocation_fixture(ElmEbiArch::LoongArch64, ELF_GENERIC_RELOCATION_RELATIVE);
         let records = dynamic_relative_relocations(&elf, &bytes).unwrap();
 
         assert_eq!(
@@ -3213,14 +3241,31 @@ mod tests {
     }
 
     #[test]
+    fn converts_x86_64_relative_relocation_to_image_base() {
+        let (elf, bytes) = relocation_fixture(ElmEbiArch::X86_64, ELF_X86_64_RELOCATION_RELATIVE);
+
+        let records = dynamic_relative_relocations(&elf, &bytes).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, ElmEbiRelocationKind::ImageBase64);
+    }
+
+    #[test]
     fn rejects_non_relative_dynamic_relocation() {
-        let (elf, bytes) = relocation_fixture(4);
+        let (elf, bytes) = relocation_fixture(ElmEbiArch::LoongArch64, 4);
+        assert!(dynamic_relative_relocations(&elf, &bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_generic_relative_number_for_x86_64() {
+        let (elf, bytes) = relocation_fixture(ElmEbiArch::X86_64, ELF_GENERIC_RELOCATION_RELATIVE);
         assert!(dynamic_relative_relocations(&elf, &bytes).is_err());
     }
 
     #[test]
     fn rejects_relative_relocation_into_segment_gap() {
-        let (elf, mut bytes) = relocation_fixture(ELF_RELOCATION_RELATIVE);
+        let (elf, mut bytes) =
+            relocation_fixture(ElmEbiArch::LoongArch64, ELF_GENERIC_RELOCATION_RELATIVE);
         write_u64(&mut bytes, 16, 0x800);
 
         assert!(dynamic_relative_relocations(&elf, &bytes).is_err());
