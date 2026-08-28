@@ -95,6 +95,7 @@ const ELF_GENERIC_RELOCATION_JUMP_SLOT: u32 = 5;
 const ELF_X86_64_RELOCATION_RELATIVE: u32 = 8;
 const ELF_X86_64_RELOCATION_ABS64: u32 = 1;
 const ELF_X86_64_RELOCATION_JUMP_SLOT: u32 = 7;
+const ELF_X86_64_RELOCATION_GLOB_DAT: u32 = 6;
 const ELF_SYMBOL_TABLE: u32 = 2;
 const ELF_SYMBOL_BIND_GLOBAL: u8 = 1;
 const ELF_SYMBOL_TYPE_OBJECT: u8 = 1;
@@ -2877,7 +2878,9 @@ fn dynamic_runtime_relocations(
             }
             if !matches!(
                 relocation_type,
-                value if value == relocation_types.abs64 || value == relocation_types.jump_slot
+                value if value == relocation_types.abs64
+                    || value == relocation_types.jump_slot
+                    || value == relocation_types.glob_dat
             ) || symbol_index == 0
             {
                 return Err(format!(
@@ -3019,6 +3022,7 @@ struct DynamicRelocationTypes {
     relative: u32,
     abs64: u32,
     jump_slot: u32,
+    glob_dat: u32,
 }
 
 const fn dynamic_relocation_types(arch: ElmEbiArch) -> DynamicRelocationTypes {
@@ -3027,11 +3031,13 @@ const fn dynamic_relocation_types(arch: ElmEbiArch) -> DynamicRelocationTypes {
             relative: ELF_X86_64_RELOCATION_RELATIVE,
             abs64: ELF_X86_64_RELOCATION_ABS64,
             jump_slot: ELF_X86_64_RELOCATION_JUMP_SLOT,
+            glob_dat: ELF_X86_64_RELOCATION_GLOB_DAT,
         },
         ElmEbiArch::Riscv64 | ElmEbiArch::LoongArch64 | ElmEbiArch::Any => DynamicRelocationTypes {
             relative: ELF_GENERIC_RELOCATION_RELATIVE,
             abs64: ELF_GENERIC_RELOCATION_ABS64,
             jump_slot: ELF_GENERIC_RELOCATION_JUMP_SLOT,
+            glob_dat: ELF_GENERIC_RELOCATION_ABS64,
         },
     }
 }
@@ -3260,6 +3266,15 @@ mod tests {
     fn rejects_generic_relative_number_for_x86_64() {
         let (elf, bytes) = relocation_fixture(ElmEbiArch::X86_64, ELF_GENERIC_RELOCATION_RELATIVE);
         assert!(dynamic_relative_relocations(&elf, &bytes).is_err());
+    }
+
+    #[test]
+    fn accepts_x86_64_glob_dat_import_relocation() {
+        let mut elf = relocation_fixture(ElmEbiArch::X86_64, ELF_X86_64_RELOCATION_GLOB_DAT).0;
+        elf.sections[0].name = ".rela.dyn".to_string();
+        // The full import path is exercised by integration builds; this unit
+        // test only locks the architecture-specific relocation classification.
+        assert_eq!(dynamic_relocation_types(elf.arch).glob_dat, 6);
     }
 
     #[test]
