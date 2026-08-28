@@ -48,7 +48,7 @@ id = "example.driver"
 version = "0.1.0"
 kind = "driver"
 backend = "native-aot"
-targets = ["riscv64gc-unknown-none-elf"]
+targets = ["x86_64-unknown-none"]
 profile = "hitoshizuku-default"
 eki = "artifacts/example.eki"
 eki_sha256 = "<64 个小写十六进制字符>"
@@ -67,7 +67,7 @@ features = ["gc"]
 [[artifact]]
 path = "artifacts/example.eki"
 kind = "eki"
-target = "riscv64gc-unknown-none-elf"
+target = "x86_64-unknown-none"
 runtime_abi = "hitoshizuku.language-runtime.v1"
 entrypoint = "elm_language_entry"
 sha256 = "<64 个小写十六进制字符>"

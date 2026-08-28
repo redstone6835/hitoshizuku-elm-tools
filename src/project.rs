@@ -474,17 +474,21 @@ pub fn sync_framework(project: &Path) -> Result<(), String> {
     fs::create_dir_all(project.join(".cargo"))
         .map_err(|err| format!("创建 ELM Cargo 配置目录失败: {err}"))?;
     sync_available_target_interfaces(project, &project_manifest)?;
-    let active_interface = ["riscv64gc-unknown-none-elf", "loongarch64-unknown-none"]
-        .into_iter()
-        .find_map(|target| {
-            KernelInterfaceManifest::load(
-                &project
-                    .join(".elm/kernel-interface")
-                    .join(target)
-                    .join("manifest.txt"),
-            )
-            .ok()
-        });
+    let active_interface = [
+        "riscv64gc-unknown-none-elf",
+        "loongarch64-unknown-none",
+        "x86_64-unknown-none",
+    ]
+    .into_iter()
+    .find_map(|target| {
+        KernelInterfaceManifest::load(
+            &project
+                .join(".elm/kernel-interface")
+                .join(target)
+                .join("manifest.txt"),
+        )
+        .ok()
+    });
     let (api_profiles, profile_hashes) = active_interface
         .as_ref()
         .and_then(|interface| kernel_profile_cfg_values(&project_manifest, &interface.target).ok())
@@ -1185,7 +1189,11 @@ fn write_elm_lock(project: &Path, manifest: &ElmProjectManifest) -> Result<(), S
         .trim()
         .to_string();
     let mut interfaces = Vec::new();
-    for target in ["riscv64gc-unknown-none-elf", "loongarch64-unknown-none"] {
+    for target in [
+        "riscv64gc-unknown-none-elf",
+        "loongarch64-unknown-none",
+        "x86_64-unknown-none",
+    ] {
         let Ok(available) = available_kernel_interfaces(target) else {
             continue;
         };
@@ -1584,6 +1592,7 @@ fn target_objdump(target: &str) -> Result<&'static str, String> {
     let candidates = match target {
         "loongarch64-unknown-none" => ["loongarch64-linux-gnu-objdump", "objdump", "llvm-objdump"],
         "riscv64gc-unknown-none-elf" => ["riscv64-linux-gnu-objdump", "objdump", "llvm-objdump"],
+        "x86_64-unknown-none" => ["objdump", "llvm-objdump", "x86_64-linux-gnu-objdump"],
         _ => return Err(format!("不支持为目标 {target} 检查集成组件段表")),
     };
     candidates
@@ -1692,7 +1701,11 @@ pub fn diagnose_project(project: &Path) -> Result<String, String> {
         "ELM 工程诊断\nname={}\nversion={}\nkind={}\nsource={}\n",
         manifest.name, manifest.version, manifest.kind, manifest.source
     );
-    for target in ["riscv64gc-unknown-none-elf", "loongarch64-unknown-none"] {
+    for target in [
+        "riscv64gc-unknown-none-elf",
+        "loongarch64-unknown-none",
+        "x86_64-unknown-none",
+    ] {
         match selected_kernel_interfaces(&manifest, target) {
             Ok(interfaces) => {
                 for bundle in interfaces {
@@ -1830,6 +1843,7 @@ fn packaged_framework_root(manifest: &ElmProjectManifest) -> Result<Option<PathB
         vec![
             "riscv64gc-unknown-none-elf".to_string(),
             "loongarch64-unknown-none".to_string(),
+            "x86_64-unknown-none".to_string(),
         ]
     };
     for target in targets {
@@ -1960,15 +1974,19 @@ fn interface_bundle_root() -> Result<PathBuf, String> {
 fn project_interface_bundle_root(start: &Path) -> Option<PathBuf> {
     start.ancestors().find_map(|directory| {
         let root = directory.join(".elm/kernel-interface");
-        ["riscv64gc-unknown-none-elf", "loongarch64-unknown-none"]
-            .into_iter()
-            .any(|target| {
-                interface_target_directory(&root, target)
-                    .join("manifest.txt")
-                    .is_file()
-            })
-            .then(|| root.canonicalize().ok())
-            .flatten()
+        [
+            "riscv64gc-unknown-none-elf",
+            "loongarch64-unknown-none",
+            "x86_64-unknown-none",
+        ]
+        .into_iter()
+        .any(|target| {
+            interface_target_directory(&root, target)
+                .join("manifest.txt")
+                .is_file()
+        })
+        .then(|| root.canonicalize().ok())
+        .flatten()
     })
 }
 
@@ -2027,8 +2045,8 @@ pub fn available_kernel_interfaces(target: &str) -> Result<Vec<KernelInterfaceBu
 }
 
 /// Locate a target bundle in either the canonical Rust target-triple layout or
-/// the shorter architecture layout emitted by `xtask` (`riscv64` and
-/// `loongarch64`).  Older interface caches used the full triple, so both forms
+/// the shorter architecture layout emitted by `xtask` (`riscv64`,
+/// `loongarch64`, and `x86_64`). Older interface caches used the full triple, so both forms
 /// must remain readable when an ELM project is opened by rust-analyzer.
 fn interface_target_directory(bundle_root: &Path, target: &str) -> PathBuf {
     let full = bundle_root.join(target);
@@ -2038,6 +2056,7 @@ fn interface_target_directory(bundle_root: &Path, target: &str) -> PathBuf {
     let short_name = match target {
         "riscv64gc-unknown-none-elf" => Some("riscv64"),
         "loongarch64-unknown-none" => Some("loongarch64"),
+        "x86_64-unknown-none" => Some("x86_64"),
         _ => None,
     };
     short_name
@@ -2162,7 +2181,11 @@ fn sync_available_target_interfaces(
     manifest: &ElmProjectManifest,
 ) -> Result<(), String> {
     let mut installed_lsp = false;
-    for target in ["riscv64gc-unknown-none-elf", "loongarch64-unknown-none"] {
+    for target in [
+        "riscv64gc-unknown-none-elf",
+        "loongarch64-unknown-none",
+        "x86_64-unknown-none",
+    ] {
         let Ok(available) = available_kernel_interfaces(target) else {
             // 新建工程不能被仓库中遗留的旧版生成缓存阻断；正式 build/doctor 会对
             // 所选 Profile 返回完整格式错误。
@@ -3206,8 +3229,12 @@ fn elm_cargo_config(
     output
         .push_str("]\n\n[target.loongarch64-unknown-none]\nlinker = \"rust-lld\"\nrustflags = [\n");
     let mut loongarch_flags = elm_link_flags(true);
-    loongarch_flags.extend(profile_flags);
+    loongarch_flags.extend(profile_flags.iter().cloned());
     append_toml_array(&mut output, &loongarch_flags);
+    output.push_str("]\n\n[target.x86_64-unknown-none]\nlinker = \"rust-lld\"\nrustflags = [\n");
+    let mut x86_flags = elm_link_flags(false);
+    x86_flags.extend(profile_flags);
+    append_toml_array(&mut output, &x86_flags);
     output.push_str("]\n");
     output
 }
@@ -3370,6 +3397,18 @@ mod tests {
 
         assert_eq!(
             interface_target_directory(directory.path(), "loongarch64-unknown-none"),
+            short
+        );
+    }
+
+    #[test]
+    fn resolves_short_x86_interface_directory() {
+        let directory = TestDirectory::new("interface-target-x86-layout");
+        let short = directory.path().join("x86_64");
+        fs::create_dir_all(&short).unwrap();
+
+        assert_eq!(
+            interface_target_directory(directory.path(), "x86_64-unknown-none"),
             short
         );
     }

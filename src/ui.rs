@@ -164,7 +164,7 @@ pub(crate) fn help(command: Option<&str>) -> bool {
                 ("[工程目录]", "可选；默认 `.`。"),
                 (
                     "--arch <架构>",
-                    "可选值：riscv64、loongarch64、all；默认 `all`。",
+                    "可选值：riscv64、loongarch64、x86_64、all；默认 `all`。",
                 ),
             ],
         ),
@@ -191,7 +191,7 @@ pub(crate) fn help(command: Option<&str>) -> bool {
                 ("<内核 ELF>", "必选；目标架构的 kernel ELF 文件。"),
                 (
                     "--target <三元组>",
-                    "必选；允许值：loongarch64-unknown-none、riscv64gc-unknown-none-elf。",
+                    "必选；允许值：loongarch64-unknown-none、riscv64gc-unknown-none-elf、x86_64-unknown-none。",
                 ),
                 (
                     "--profile <标识>",
@@ -308,7 +308,10 @@ pub(crate) fn help(command: Option<&str>) -> bool {
             "构建 ELM Rust PIE，并打包为带 ABI、重定位和可选签名的 EKI。",
             &[
                 ("<工程目录>", "包含 Elm.toml 的工程目录。"),
-                ("--arch <架构>", "必选；可选值：riscv64、loongarch64、all。"),
+                (
+                    "--arch <架构>",
+                    "必选；可选值：riscv64、loongarch64、x86_64、all。",
+                ),
                 (
                     "--unsigned",
                     "生成未签名镜像；不能与 `--key` 或 `--epoch` 同时使用。",
@@ -341,7 +344,7 @@ pub(crate) fn help(command: Option<&str>) -> bool {
                 ),
                 (
                     "--target <三元组>",
-                    "必选目标：loongarch64-unknown-none 或 riscv64gc-unknown-none-elf。",
+                    "必选目标：loongarch64-unknown-none、riscv64gc-unknown-none-elf 或 x86_64-unknown-none。",
                 ),
                 ("--output <目录>", "模块 EKI/集成归档输出目录。"),
                 ("--features <列表>", "可选的全局 Cargo feature 列表。"),
@@ -456,7 +459,7 @@ pub(crate) fn help(command: Option<&str>) -> bool {
             &[
                 (
                     "<目标三元组>",
-                    "loongarch64-unknown-none 或 riscv64gc-unknown-none-elf。",
+                    "loongarch64-unknown-none、riscv64gc-unknown-none-elf 或 x86_64-unknown-none。",
                 ),
                 ("<输出.h>", "写入 fingerprint 宏定义的 C header 路径。"),
             ],
@@ -522,7 +525,7 @@ fn global_help(ui: &Ui) {
         "生成 ELM Rust ABI fingerprint C header（内部命令）。",
     );
     ui.command("help [子命令]", "显示本帮助或某个子命令的详细参数。");
-    ui.note("提示：所有命令都支持 `--help`；build/check 使用 riscv64、loongarch64、all，profile-export/build-set 使用完整 Rust target triple。");
+    ui.note("提示：所有命令都支持 `--help`；build/check 使用 riscv64、loongarch64、x86_64、all，profile-export/build-set 使用完整 Rust target triple。");
 }
 
 fn command_help(

@@ -804,9 +804,11 @@ fn selected_targets(arch: &str) -> Result<&'static [(&'static str, &'static str)
     match arch {
         "riscv64" => Ok(&[("riscv64", "riscv64gc-unknown-none-elf")]),
         "loongarch64" => Ok(&[("loongarch64", "loongarch64-unknown-none")]),
+        "x86_64" => Ok(&[("x86_64", "x86_64-unknown-none")]),
         "all" => Ok(&[
             ("riscv64", "riscv64gc-unknown-none-elf"),
             ("loongarch64", "loongarch64-unknown-none"),
+            ("x86_64", "x86_64-unknown-none"),
         ]),
         _ => Err(format!("未知架构: {arch}")),
     }
@@ -850,6 +852,7 @@ fn cmd_fingerprint_header(args: &[String]) -> Result<(), String> {
     let arch = match args[0].as_str() {
         "riscv64gc-unknown-none-elf" => ElmEbiArch::Riscv64,
         "loongarch64-unknown-none" => ElmEbiArch::LoongArch64,
+        "x86_64-unknown-none" => ElmEbiArch::X86_64,
         _ => return Err(format!("unsupported ELM target triple: {}", args[0])),
     };
     let fingerprint = default_abi_fingerprint(arch);
@@ -1818,6 +1821,7 @@ fn arch_from_machine(machine: u16) -> Result<ElmEbiArch, String> {
     match machine {
         243 => Ok(ElmEbiArch::Riscv64),
         258 => Ok(ElmEbiArch::LoongArch64),
+        62 => Ok(ElmEbiArch::X86_64),
         _ => Err(format!("unsupported ELF machine: {machine}")),
     }
 }
@@ -1826,6 +1830,7 @@ fn target_triple_for_arch(arch: ElmEbiArch) -> Result<&'static str, String> {
     match arch {
         ElmEbiArch::Riscv64 => Ok("riscv64gc-unknown-none-elf"),
         ElmEbiArch::LoongArch64 => Ok("loongarch64-unknown-none"),
+        ElmEbiArch::X86_64 => Ok("x86_64-unknown-none"),
         ElmEbiArch::Any => Err("原生 ELM 不能使用 Any 架构接口包".to_string()),
     }
 }
@@ -2315,6 +2320,7 @@ fn default_abi_fingerprint(arch: ElmEbiArch) -> ElmRustAbiFingerprintV1 {
         ElmEbiArch::Any => b"any".as_slice(),
         ElmEbiArch::Riscv64 => b"riscv64gc-unknown-none-elf".as_slice(),
         ElmEbiArch::LoongArch64 => b"loongarch64-unknown-none".as_slice(),
+        ElmEbiArch::X86_64 => b"x86_64-unknown-none".as_slice(),
     };
     ElmRustAbiFingerprintV1::new(
         sha256(&rustc),
@@ -3127,6 +3133,23 @@ mod tests {
         assert!(error.contains("auto"));
         assert!(error.contains("always"));
         assert!(error.contains("never"));
+    }
+
+    #[test]
+    fn x86_target_catalog_uses_elf_machine_and_stable_triple() {
+        assert_eq!(
+            selected_targets("x86_64").unwrap(),
+            &[("x86_64", "x86_64-unknown-none")]
+        );
+        assert_eq!(arch_from_machine(62).unwrap(), ElmEbiArch::X86_64);
+        assert_eq!(
+            target_triple_for_arch(ElmEbiArch::X86_64).unwrap(),
+            "x86_64-unknown-none"
+        );
+        assert_eq!(
+            default_abi_fingerprint(ElmEbiArch::X86_64).target_spec_hash,
+            elm::sha256(b"x86_64-unknown-none")
+        );
     }
 
     fn relocation_fixture(relocation_type: u32) -> (ElfImage, Vec<u8>) {

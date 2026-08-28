@@ -42,6 +42,11 @@ cargo elm sdk build/elm-interface/riscv64/manifest.txt \
   --package LanguagePackage.toml --adapters LanguageBridge.toml \
   --output generated/rust-sdk
 cargo elm package-check .
+
+# x86_64 接口包使用相同的命令，目标目录为 build/elm-interface/x86_64：
+cargo elm interface-schema build/elm-interface/x86_64/manifest.txt \
+  --package LanguagePackage.toml --adapters LanguageBridge.toml \
+  --output interface.schema.json
 ```
 
 `LanguagePackage.toml`、`LanguageBridge.toml` 均使用 schema v2 严格字段校验；未知字段、

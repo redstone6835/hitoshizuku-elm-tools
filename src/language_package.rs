@@ -1882,7 +1882,7 @@ fn validate_eki_binding(
         return Err(format!("{label} 的 bridge ABI 与 schema 不一致"));
     }
     let expected_arch = target_arch(target).ok_or_else(|| {
-        format!("{label} 的 target 不属于当前 ELM 支持的 RISC-V/LoongArch 架构: {target}")
+        format!("{label} 的 target 不属于当前 ELM 支持的 RISC-V/LoongArch/x86_64 架构: {target}")
     })?;
     if image.unit.target.arch != expected_arch {
         return Err(format!(
@@ -1898,6 +1898,8 @@ fn target_arch(target: &str) -> Option<ElmEbiArch> {
         Some(ElmEbiArch::Riscv64)
     } else if target.starts_with("loongarch64") {
         Some(ElmEbiArch::LoongArch64)
+    } else if target.starts_with("x86_64") {
+        Some(ElmEbiArch::X86_64)
     } else {
         None
     }

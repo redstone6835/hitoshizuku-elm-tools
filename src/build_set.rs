@@ -530,7 +530,11 @@ pub fn configure_set(set_path: &Path, config_path: &Path, mode: ConfigMode) -> R
         selected.insert(module.config.clone(), value.to_string());
     }
 
-    for target in ["loongarch64-unknown-none", "riscv64gc-unknown-none-elf"] {
+    for target in [
+        "loongarch64-unknown-none",
+        "riscv64gc-unknown-none-elf",
+        "x86_64-unknown-none",
+    ] {
         let active = active_modules(modules.clone(), target)?;
         let ordered = topological_order(&active)?;
         let modes = resolve_modes(&ordered, &selected)?;
@@ -813,6 +817,8 @@ fn target_arch_name(target: &str) -> Result<&'static str, String> {
         Ok("riscv64")
     } else if target.starts_with("loongarch64") {
         Ok("loongarch64")
+    } else if target.starts_with("x86_64") {
+        Ok("x86_64")
     } else {
         Err(format!("不支持的模块集合目标: {target}"))
     }
@@ -823,6 +829,8 @@ fn target_ebi_arch(target: &str) -> Result<elm::ElmEbiArch, String> {
         Ok(elm::ElmEbiArch::Riscv64)
     } else if target.starts_with("loongarch64") {
         Ok(elm::ElmEbiArch::LoongArch64)
+    } else if target.starts_with("x86_64") {
+        Ok(elm::ElmEbiArch::X86_64)
     } else {
         Err(format!("不支持的 EBI 目标: {target}"))
     }

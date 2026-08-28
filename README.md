@@ -30,6 +30,11 @@ cargo elm profile-export build/loongarch64/kernel \
   --target loongarch64-unknown-none \
   --profile hitoshizuku-default \
   --output build/elm-interface/loongarch64
+# x86_64 内核使用 x86_64-unknown-none，接口目录可按目标名保存：
+cargo elm profile-export build/x86_64/kernel \
+  --target x86_64-unknown-none \
+  --profile hitoshizuku-default \
+  --output build/elm-interface/x86_64
 ```
 
 ## 生成目标 Profile
@@ -41,6 +46,7 @@ framework 发生变化后，应先在 Hitoshizuku 内核仓库生成该目标的
 cd "$HITOSHIZUKU_KERNEL_ROOT"
 cargo xtask modules --target riscv64gc-unknown-none-elf
 # 或：cargo xtask modules --target loongarch64-unknown-none
+# 或：cargo xtask modules --target x86_64-unknown-none
 ```
 
 随后回到独立 ELM 工程同步接口并构建：
@@ -48,6 +54,8 @@ cargo xtask modules --target riscv64gc-unknown-none-elf
 ```sh
 cargo elm sync .
 cargo elm build . --arch riscv64 --unsigned
+# x86_64 ELM 构建：
+cargo elm build . --arch x86_64 --unsigned
 ```
 
 首次 `sync` 后，`build` 和 `check` 会复用工程中的 `.elm/kernel-interface`，不要求每次

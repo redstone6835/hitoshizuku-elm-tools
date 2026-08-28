@@ -1583,6 +1583,7 @@ fn build_import_library(
     let return_instruction = match target {
         "loongarch64-unknown-none" => "jirl $zero, $ra, 0",
         "riscv64gc-unknown-none-elf" => "ret",
+        "x86_64-unknown-none" => "ret",
         _ => return Err(format!("不支持为目标 {target} 生成内核导入库")),
     };
     let mut entries = BTreeMap::new();
@@ -1856,6 +1857,17 @@ fn target_nm(target: &str) -> Result<&'static str, String> {
     match target {
         "loongarch64-unknown-none" => Ok("loongarch64-linux-gnu-nm"),
         "riscv64gc-unknown-none-elf" => Ok("riscv64-linux-gnu-nm"),
+        // x86_64-unknown-none uses the host GNU/LLVM binutils: the object
+        // format and symbol ABI are the native x86_64 ELF format.
+        "x86_64-unknown-none" => {
+            if command_available("nm") {
+                Ok("nm")
+            } else if command_available("llvm-nm") {
+                Ok("llvm-nm")
+            } else {
+                Err("缺少 x86_64 nm（需要 nm 或 llvm-nm）".to_string())
+            }
+        }
         _ => Err(format!("不支持读取目标 {target} 的内核符号")),
     }
 }
@@ -1864,6 +1876,15 @@ fn target_cc(target: &str) -> Result<&'static str, String> {
     match target {
         "loongarch64-unknown-none" => Ok("loongarch64-linux-gnu-gcc"),
         "riscv64gc-unknown-none-elf" => Ok("riscv64-linux-gnu-gcc"),
+        "x86_64-unknown-none" => {
+            if command_available("cc") {
+                Ok("cc")
+            } else if command_available("gcc") {
+                Ok("gcc")
+            } else {
+                Err("缺少 x86_64 C 编译器（需要 cc 或 gcc）".to_string())
+            }
+        }
         _ => Err(format!("不支持为目标 {target} 生成导入库")),
     }
 }
@@ -1894,6 +1915,15 @@ fn target_objcopy(target: &str) -> Result<&'static str, String> {
                 )
             }
         }
+        "x86_64-unknown-none" => {
+            if command_available("objcopy") {
+                Ok("objcopy")
+            } else if command_available("llvm-objcopy") {
+                Ok("llvm-objcopy")
+            } else {
+                Err("缺少 x86_64 objcopy（需要 objcopy 或 llvm-objcopy）".to_string())
+            }
+        }
         _ => Err(format!("不支持为目标 {target} 过滤 Rust 支持对象")),
     }
 }
@@ -1917,6 +1947,15 @@ fn target_ld(target: &str) -> Result<&'static str, String> {
     match target {
         "loongarch64-unknown-none" => Ok("loongarch64-linux-gnu-ld"),
         "riscv64gc-unknown-none-elf" => Ok("riscv64-linux-gnu-ld"),
+        "x86_64-unknown-none" => {
+            if command_available("ld") {
+                Ok("ld")
+            } else if command_available("ld.lld") {
+                Ok("ld.lld")
+            } else {
+                Err("缺少 x86_64 linker（需要 ld 或 ld.lld）".to_string())
+            }
+        }
         _ => Err(format!("不支持为目标 {target} 合并 Rust 支持对象")),
     }
 }
@@ -3077,6 +3116,22 @@ fn hex_bytes(value: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn x86_toolchain_mapping_uses_native_elf_tools() {
+        assert!(matches!(
+            target_cc("x86_64-unknown-none").unwrap(),
+            "cc" | "gcc"
+        ));
+        assert!(matches!(
+            target_nm("x86_64-unknown-none").unwrap(),
+            "nm" | "llvm-nm"
+        ));
+        assert!(matches!(
+            target_ld("x86_64-unknown-none").unwrap(),
+            "ld" | "ld.lld"
+        ));
+    }
 
     fn test_kernel_root() -> Option<PathBuf> {
         crate::project::framework_source_root().ok()
