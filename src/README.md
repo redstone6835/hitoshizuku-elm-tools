@@ -75,6 +75,16 @@ cargo elm disassemble build/x86_64/modules/example.eki \
 `--adjust-vma`。`--no-show-raw-insn` 隐藏原始字节，`-M`/`--disassembler-options` 和
 `--tool` 分别传递反汇编器选项、指定 objdump 路径。
 
+全局 `--color auto|always|never` 同样控制反汇编输出。objdump 的输出由父进程捕获，因此
+对于支持 `--disassembler-color` 的 GNU/LLVM 工具会显式传递 `on` 或 `off`；不支持该选项
+的旧版/自定义工具仍会为段标题和函数标签补充颜色。`auto` 只在标准输出和标准错误都是
+终端时着色。
+
+EKI 没有完整 ELF 符号表。工具会根据已验证的模块描述符 `ImageBase64` 重定位恢复
+`__elm_module_*_v1` 生命周期/入口标签；没有真实 Code 符号的段会得到稳定的
+`__eki_text_segN` 边界标签。这些标签会写入临时 ELF，因此 GNU/LLVM objdump 会输出
+`<标签>:` 函数段标题。任意未写入 EKI 元数据的 Rust 函数名不会被猜测。
+
 该命令先通过 EKI 解析器校验文件，再把 Code 段和符号位置写入临时 ELF，最后调用 GNU 或
 LLVM `objdump`；临时文件会在命令结束时清理。EKI 的地址是镜像相对地址，段间按内核运行时
 页对齐规则布置，因此默认输出与模块装载布局一致。目标为 `any` 的 EKI 必须显式指定

@@ -68,6 +68,14 @@ impl Ui {
         self.color
     }
 
+    /// 返回供捕获式子进程使用的颜色模式。
+    ///
+    /// objdump 的 stdout 会被父进程捕获，不能依赖它自己的 TTY 检测；调用方
+    /// 已经根据父进程的终端和全局 `--color` 选项算好了最终结果。
+    pub(crate) fn disassembler_color_mode(&self) -> &'static str {
+        if self.color { "on" } else { "off" }
+    }
+
     fn paint(&self, code: &str, text: impl AsRef<str>) -> String {
         let text = text.as_ref();
         if self.color {

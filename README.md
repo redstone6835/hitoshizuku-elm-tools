@@ -116,6 +116,16 @@ cargo elm objdump build/modules.eki --variant 1 --start-address 0x1000 \
 - `--no-show-raw-insn` 隐藏机器字节，`--tool <路径>` 显式指定 GNU/LLVM objdump；未指定时
   也可使用 `ELM_OBJDUMP` 环境变量。
 
+反汇编输出中的 `--color auto|always|never` 与全局命令行颜色策略一致。由于工具会捕获
+objdump 的输出再统一打印，工具会把解析后的颜色模式显式传给支持
+`--disassembler-color` 的 GNU/LLVM objdump；旧版或自定义 objdump 仍会由 ELM 为段标题和
+函数标签着色。`auto` 在终端中启用颜色，重定向到文件或管道时保持纯文本。
+
+EKI 不携带完整的 Rust/ELF 函数符号表。工具会从经过校验的模块描述符重定位恢复九个
+稳定的生命周期/入口标签（例如 `__elm_module_initialize_v1`），并为没有入口标签的 Code
+段生成 `__eki_text_segN` 段边界标签；这些标签会同时出现在 `SYMBOL TABLE` 和 objdump 的
+`<name>:` 函数标题中。被剥离且不在 EKI 元数据中的任意 Rust 函数名无法由机器码可靠推断。
+
 EKI 不是 ELF，不能直接交给系统 `objdump`。工具只反汇编 EKI 的 Code 段，段地址按运行时的
 页对齐布局计算；没有 Code 段的 metadata-only EKI 会被拒绝。目标为 `any` 且未提供
 `--arch` 时也会报错。系统中需要可执行的 GNU 或 LLVM `objdump`，并且所选工具必须支持该

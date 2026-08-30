@@ -12,8 +12,10 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use elm::{
-    ELM_EKI_BLOCK_DESC_SIZE, ELM_EKI_HEADER_SIZE, ElmEbiArch, ElmEbiImage, ElmEbiSegmentKind,
-    ElmEkiVariantRecord, parse_eki_image, parse_eki_variants,
+    ELM_EKI_BLOCK_DESC_SIZE, ELM_EKI_HEADER_SIZE, ELM_MODULE_DESCRIPTOR_ABI_VERSION,
+    ELM_MODULE_DESCRIPTOR_MAGIC, ELM_MODULE_DESCRIPTOR_SYMBOL, ElmEbiArch, ElmEbiImage,
+    ElmEbiRelocationKind, ElmEbiSegmentKind, ElmEkiVariantRecord, parse_eki_image,
+    parse_eki_variants,
 };
 
 const PAGE_SIZE: u64 = 4096;
@@ -27,6 +29,20 @@ const ELF_SHF_ALLOC: u64 = 1 << 1;
 const ELF_SHF_EXECINSTR: u64 = 1 << 2;
 const ELF_STB_GLOBAL: u8 = 1;
 const ELF_STT_FUNC: u8 = 2;
+const MODULE_DESCRIPTOR_POINTER_OFFSET: u64 = 32;
+const MODULE_DESCRIPTOR_POINTER_COUNT: usize = 9;
+const MODULE_DESCRIPTOR_SIZE: usize = 104;
+const MODULE_FUNCTION_NAMES: [&str; MODULE_DESCRIPTOR_POINTER_COUNT] = [
+    "__elm_module_initialize_v1",
+    "__elm_module_finalize_v1",
+    "__elm_module_quiesce_v1",
+    "__elm_module_pause_v1",
+    "__elm_module_resume_v1",
+    "__elm_module_migrate_export_v1",
+    "__elm_module_migrate_import_v1",
+    "__elm_module_migrate_abort_v1",
+    "__elm_module_entry_v1",
+];
 const ELF_MACHINE_X86_64: u16 = 62;
 const ELF_MACHINE_RISCV: u16 = 243;
 const ELF_MACHINE_LOONGARCH: u16 = 258;
@@ -604,6 +620,7 @@ fn build_image_view(
             size: symbol.size,
         });
     }
+    add_descriptor_function_symbols(image, &sections, &mut symbols)?;
     if !options.symbols.is_empty() {
         for requested in &options.symbols {
             if !symbols.iter().any(|symbol| &symbol.name == requested) {
@@ -626,26 +643,172 @@ fn build_image_view(
     })
 }
 
+/// EKI 不保存完整 ELF 符号表，但模块描述符的九个函数指针通过
+/// `ImageBase64` 重定位明确绑定到 Code 段。利用这些已验证的 ABI 位置可以
+/// 恢复稳定的生命周期/entry 标签，不需要对机器码做不可靠的函数边界猜测。
+fn add_descriptor_function_symbols(
+    image: &ElmEbiImage,
+    sections: &[CodeSection],
+    symbols: &mut Vec<CodeSymbol>,
+) -> Result<(), String> {
+    let Some(descriptor) = image
+        .symbol_locations
+        .iter()
+        .find(|symbol| symbol.name == ELM_MODULE_DESCRIPTOR_SYMBOL)
+    else {
+        return Ok(());
+    };
+    if descriptor.size < MODULE_DESCRIPTOR_SIZE as u64 {
+        return Ok(());
+    }
+    let Some(payload) = image.payloads.iter().find(|payload| {
+        payload.segment_index == descriptor.segment_index
+            && payload.kind == ElmEbiSegmentKind::ReadOnlyData
+    }) else {
+        return Ok(());
+    };
+    let descriptor_offset = usize::try_from(descriptor.offset)
+        .map_err(|_| "模块描述符偏移超出宿主地址空间".to_string())?;
+    let descriptor_end = descriptor_offset
+        .checked_add(MODULE_DESCRIPTOR_SIZE)
+        .ok_or_else(|| "模块描述符范围溢出".to_string())?;
+    let Some(descriptor_bytes) = payload.bytes.get(descriptor_offset..descriptor_end) else {
+        return Ok(());
+    };
+    if descriptor_bytes.get(..ELM_MODULE_DESCRIPTOR_MAGIC.len())
+        != Some(ELM_MODULE_DESCRIPTOR_MAGIC.as_slice())
+        || u16::from_le_bytes([descriptor_bytes[8], descriptor_bytes[9]])
+            != ELM_MODULE_DESCRIPTOR_ABI_VERSION
+        || u16::from_le_bytes([descriptor_bytes[10], descriptor_bytes[11]])
+            != MODULE_DESCRIPTOR_SIZE as u16
+    {
+        return Ok(());
+    }
+
+    let mut locations = Vec::with_capacity(MODULE_DESCRIPTOR_POINTER_COUNT);
+    for (index, name) in MODULE_FUNCTION_NAMES.iter().enumerate() {
+        let target_offset = descriptor
+            .offset
+            .checked_add(MODULE_DESCRIPTOR_POINTER_OFFSET)
+            .and_then(|value| value.checked_add((index * 8) as u64))
+            .ok_or_else(|| format!("模块描述符字段 {name} 偏移溢出"))?;
+        let mut matches = image.relocations.iter().filter(|relocation| {
+            relocation.kind == ElmEbiRelocationKind::ImageBase64
+                && relocation.target_segment_index == descriptor.segment_index
+                && relocation.target_offset == target_offset
+        });
+        let Some(relocation) = matches.next() else {
+            continue;
+        };
+        // 重复 relocation 无法唯一确定函数地址，宁可不显示该标签。
+        if matches.next().is_some() || relocation.addend < 0 {
+            continue;
+        }
+        let value = relocation.addend as u64;
+        let Some(section_index) = sections.iter().position(|section| {
+            section
+                .runtime_offset
+                .checked_add(section.bytes.len() as u64)
+                .is_some_and(|end| value >= section.runtime_offset && value < end)
+        }) else {
+            continue;
+        };
+        locations.push((index, section_index, value));
+    }
+
+    for &(index, section_index, value) in &locations {
+        let name = MODULE_FUNCTION_NAMES[index];
+        if symbols.iter().any(|symbol| symbol.name == name) {
+            continue;
+        }
+        let next = symbols
+            .iter()
+            .filter(|symbol| symbol.section_index == section_index && symbol.value > value)
+            .map(|symbol| symbol.value)
+            .chain(
+                locations
+                    .iter()
+                    .filter(|(_, candidate_section, candidate_value)| {
+                        *candidate_section == section_index && *candidate_value > value
+                    })
+                    .map(|(_, _, candidate_value)| *candidate_value),
+            )
+            .min();
+        let size = next
+            .and_then(|next| next.checked_sub(value))
+            .filter(|size| *size != 0)
+            // 没有后继符号时无法可靠推断函数边界。使用一个保守的非零
+            // 大小，避免 `--symbol` 把整个剩余 Code 段当成最后一个函数。
+            .unwrap_or(1);
+        symbols.push(CodeSymbol {
+            name: name.to_string(),
+            section_index,
+            value,
+            size,
+        });
+    }
+    Ok(())
+}
+
 fn print_banner(path: &Path, choice: &ImageChoice, view: &ImageView) {
-    println!("file format eki");
-    println!("input: {}", path.display());
-    println!("architecture: {}", arch_name(view.arch));
-    println!("image base: 0x{:x}", view.base_address);
+    println!("{}", paint("1;36", "file format eki"));
+    println!("{} {}", paint("36", "input:"), path.display());
+    println!(
+        "{} {}",
+        paint("36", "architecture:"),
+        paint("1", arch_name(view.arch))
+    );
+    println!("{} 0x{:x}", paint("36", "image base:"), view.base_address);
     if let Some(index) = choice.variant_index {
         println!(
-            "variant: {index} priority={}",
+            "{} {index} priority={}",
+            paint("36", "variant:"),
             choice.record.map_or(0, |record| record.priority)
         );
     }
     for (index, section) in view.sections.iter().enumerate() {
         let address = view.base_address.saturating_add(section.runtime_offset);
         println!(
-            "section[{index}]: .text.seg{} address=0x{address:x} size=0x{:x}",
+            "{} .text.seg{} address=0x{address:x} size=0x{:x}",
+            paint("1;34", &format!("section[{index}]:")),
             section.segment_index,
             section.bytes.len()
         );
     }
-    println!("symbols: {}", view.symbols.len());
+    println!(
+        "{} {}",
+        paint("36", "Code symbols:"),
+        paint("1;32", &view.symbols.len().to_string())
+    );
+    if view.symbols.is_empty() {
+        println!(
+            "{}",
+            paint(
+                "2",
+                "(EKI 未携带 Code 函数符号；下方 __eki_text_segN 是段边界标签)",
+            )
+        );
+    } else {
+        println!("{}", paint("1;34", "SYMBOL TABLE:"));
+        let mut symbols = view.symbols.iter().collect::<Vec<_>>();
+        symbols.sort_by_key(|symbol| (symbol.value, symbol.name.as_str()));
+        for symbol in symbols {
+            let address = view.base_address.saturating_add(symbol.value);
+            println!(
+                "  {address:016x} {size:08x} {}",
+                paint("1;32", &symbol.name),
+                size = symbol.size
+            );
+        }
+    }
+}
+
+fn paint(code: &str, text: &str) -> String {
+    if crate::ui::current().color_enabled() {
+        format!("\x1b[{code}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
 }
 
 fn arch_name(arch: ElmEbiArch) -> &'static str {
@@ -694,9 +857,30 @@ fn build_elf(view: &ImageView) -> Result<Vec<u8>, String> {
     let strtab_name = append_string(&mut shstrtab, ".strtab")?;
     let shstrtab_name = append_string(&mut shstrtab, ".shstrtab")?;
 
+    // EKI deliberately stores only ABI-relevant symbol locations.  Keep the
+    // real symbols intact, then add one deterministic boundary label for each
+    // code section that has no symbol at its start.  This gives objdump a
+    // stable function-section marker without pretending that a byte-level
+    // heuristic recovered a Rust function name.
+    let mut output_symbols = view.symbols.clone();
+    for (section_index, section) in view.sections.iter().enumerate() {
+        if output_symbols.iter().any(|symbol| {
+            symbol.section_index == section_index && symbol.value == section.runtime_offset
+        }) {
+            continue;
+        }
+        output_symbols.push(CodeSymbol {
+            name: format!("__eki_text_seg{}", section.segment_index),
+            section_index,
+            value: section.runtime_offset,
+            size: section.bytes.len() as u64,
+        });
+    }
+    output_symbols.sort_by_key(|symbol| (symbol.value, symbol.name.clone()));
+
     let mut strtab = vec![0u8];
     let mut string_offsets = BTreeMap::new();
-    for symbol in &view.symbols {
+    for symbol in &output_symbols {
         if !string_offsets.contains_key(&symbol.name) {
             let offset = append_string(&mut strtab, &symbol.name)?;
             string_offsets.insert(symbol.name.clone(), offset);
@@ -708,7 +892,7 @@ fn build_elf(view: &ImageView) -> Result<Vec<u8>, String> {
     let shstrtab_index = symtab_index + 2;
     let section_count = shstrtab_index + 1;
     let mut symtab = vec![0u8; ELF64_SYMBOL_SIZE];
-    for symbol in &view.symbols {
+    for symbol in &output_symbols {
         let name = *string_offsets
             .get(&symbol.name)
             .ok_or_else(|| format!("符号字符串缺失: {}", symbol.name))?;
@@ -947,6 +1131,16 @@ fn invoke_objdump_once(
     if options.no_show_raw_insn {
         command.arg("--no-show-raw-insn");
     }
+    // stdout is captured below, so objdump cannot infer the user's terminal.
+    // Forward the already-resolved cargo-elm color policy explicitly when the
+    // selected tool advertises this GNU/LLVM-compatible option.  A custom or
+    // older objdump remains usable even if it predates disassembler colors.
+    if tool_supports_disassembler_color(tool) {
+        command.arg(format!(
+            "--disassembler-color={}",
+            crate::ui::current().disassembler_color_mode()
+        ));
+    }
     command.arg(format!("--adjust-vma=0x{:x}", options.base_address));
     if let Some(start) = options.start_address {
         command.arg(format!("--start-address=0x{start:x}"));
@@ -998,6 +1192,17 @@ fn tool_is_llvm(path: &Path) -> bool {
         })
 }
 
+fn tool_supports_disassembler_color(path: &Path) -> bool {
+    Command::new(path)
+        .arg("--help")
+        .output()
+        .is_ok_and(|output| {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            stdout.contains("--disassembler-color") || stderr.contains("--disassembler-color")
+        })
+}
+
 fn select_tool(explicit: Option<&Path>, arch: ElmEbiArch) -> Result<PathBuf, String> {
     if let Some(path) = explicit {
         return Ok(path.to_path_buf());
@@ -1038,8 +1243,22 @@ fn print_objdump_output(output: &str, temporary: &Path, input: &Path) {
         if line.contains("file format ") {
             continue;
         }
-        println!("{line}");
+        println!("{}", colorize_objdump_line(line));
     }
+}
+
+fn colorize_objdump_line(line: &str) -> String {
+    if !crate::ui::current().color_enabled() || line.contains('\x1b') {
+        return line.to_string();
+    }
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("Disassembly of section ") {
+        return paint("1;34", line);
+    }
+    if trimmed.ends_with(":") && trimmed.contains('<') && trimmed.contains('>') {
+        return paint("1;32", line);
+    }
+    line.to_string()
 }
 
 #[cfg(test)]
@@ -1210,6 +1429,144 @@ mod tests {
         .unwrap();
         assert!(output.contains("demo_entry"));
         assert!(output.contains("ret"));
+    }
+
+    #[test]
+    fn derives_module_function_labels_from_descriptor_relocations() {
+        let manifest = elm::ElmManifest::new(
+            elm::ElmName::new("demo").unwrap(),
+            elm::ElmVersion::new("1.0.0").unwrap(),
+            elm::ElmKind::Driver,
+        );
+        let unit = elm::ElmEbiUnit::new(manifest, elm::ElmEbiTarget::new(ElmEbiArch::X86_64))
+            .with_segment(elm::ElmEbiSegment::from_payload(
+                ElmEbiSegmentKind::ReadOnlyData,
+                0,
+                MODULE_DESCRIPTOR_SIZE as u64,
+                MODULE_DESCRIPTOR_SIZE as u64,
+                8,
+                0,
+                0,
+                0,
+            ))
+            .with_segment(elm::ElmEbiSegment::from_payload(
+                ElmEbiSegmentKind::Code,
+                0,
+                64,
+                64,
+                16,
+                1,
+                0,
+                0,
+            ));
+        let mut descriptor = vec![0u8; MODULE_DESCRIPTOR_SIZE];
+        descriptor[..ELM_MODULE_DESCRIPTOR_MAGIC.len()]
+            .copy_from_slice(&ELM_MODULE_DESCRIPTOR_MAGIC);
+        descriptor[8..10].copy_from_slice(&ELM_MODULE_DESCRIPTOR_ABI_VERSION.to_le_bytes());
+        descriptor[10..12].copy_from_slice(&(MODULE_DESCRIPTOR_SIZE as u16).to_le_bytes());
+        let mut image = elm::ElmEbiImage::new(unit)
+            .with_payload(elm::ElmEbiSegmentPayload::new(
+                0,
+                0,
+                ElmEbiSegmentKind::ReadOnlyData,
+                MODULE_DESCRIPTOR_SIZE as u64,
+                MODULE_DESCRIPTOR_SIZE as u64,
+                descriptor,
+            ))
+            .with_payload(elm::ElmEbiSegmentPayload::new(
+                1,
+                1,
+                ElmEbiSegmentKind::Code,
+                64,
+                64,
+                vec![0xc3; 64],
+            ))
+            .with_symbol_location(
+                elm::ElmEbiSymbolLocationDecl::new(
+                    ELM_MODULE_DESCRIPTOR_SYMBOL,
+                    0,
+                    0,
+                    MODULE_DESCRIPTOR_SIZE as u64,
+                    0,
+                )
+                .unwrap(),
+            );
+        for index in 0..MODULE_DESCRIPTOR_POINTER_COUNT {
+            image = image.with_relocation(
+                elm::ElmEbiRelocationDecl::new(
+                    ElmEbiRelocationKind::ImageBase64,
+                    0,
+                    0,
+                    MODULE_DESCRIPTOR_POINTER_OFFSET + (index * 8) as u64,
+                    0,
+                    (index * 4) as i64,
+                )
+                .unwrap(),
+            );
+        }
+        let sections = vec![CodeSection {
+            segment_index: 1,
+            runtime_offset: 0,
+            bytes: vec![0xc3; 64],
+        }];
+        let mut symbols = Vec::new();
+        add_descriptor_function_symbols(&image, &sections, &mut symbols).unwrap();
+        assert_eq!(symbols.len(), MODULE_DESCRIPTOR_POINTER_COUNT);
+        assert_eq!(symbols[0].name, "__elm_module_initialize_v1");
+        assert_eq!(symbols[0].value, 0);
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| { symbol.name == "__elm_module_entry_v1" && symbol.value == 32 })
+        );
+        assert_eq!(
+            symbols
+                .iter()
+                .find(|symbol| symbol.name == "__elm_module_entry_v1")
+                .unwrap()
+                .size,
+            1
+        );
+        let elf = build_elf(&ImageView {
+            arch: ElmEbiArch::X86_64,
+            base_address: 0,
+            sections,
+            symbols,
+            entry: 0,
+        })
+        .unwrap();
+        assert!(
+            elf.windows(b"__elm_module_initialize_v1\0".len())
+                .any(|window| window == b"__elm_module_initialize_v1\0")
+        );
+    }
+
+    #[test]
+    fn emits_a_stable_label_for_anonymous_code_sections() {
+        let view = ImageView {
+            arch: ElmEbiArch::X86_64,
+            base_address: 0,
+            sections: vec![CodeSection {
+                segment_index: 7,
+                runtime_offset: 0x1000,
+                bytes: vec![0xc3],
+            }],
+            symbols: Vec::new(),
+            entry: 0x1000,
+        };
+        let elf = build_elf(&view).unwrap();
+        let temporary = write_temporary_elf(&elf).unwrap();
+        let output = invoke_objdump(
+            &temporary.path,
+            &Options {
+                input: PathBuf::from("anonymous.eki"),
+                tool: Some(PathBuf::from("objdump")),
+                ..Options::default()
+            },
+            ElmEbiArch::X86_64,
+        )
+        .unwrap();
+        assert!(output.contains("__eki_text_seg7"));
     }
 
     #[test]
