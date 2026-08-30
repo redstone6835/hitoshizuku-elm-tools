@@ -21,6 +21,8 @@
   extension 和 kernel mixin 元数据。
 - `ui.rs`：Rust/Cargo 风格的彩色状态标签、帮助文本和交互式配置提示；支持
   `--color`、`CARGO_TERM_COLOR` 和 `NO_COLOR`。
+- `disasm.rs`：校验 EKI、恢复运行时段布局并生成临时 ELF，调用 GNU/LLVM `objdump`
+  输出带符号的 Code 段反汇编。
 - `kernel-api-crates.txt`：内核可被 ELM 引用的 crate 目录快照。它必须与锁定的内核
   revision 一起更新，不能单独扩展为任意 crate 搜索。
 
@@ -54,6 +56,30 @@ cargo elm interface-schema build/elm-interface/x86_64/manifest.txt \
 并明确请求/回复固定布局、版本、ownership、字节上限和可选 capability。生成代码只传递
 `u64` operation ID、边界检查后的 byte buffer 和不透明资源句柄，不会把物理地址、裸指针
 或未经登记的 Rust 类型跨越 ELM 边界。格式细节见根目录 `LANGUAGE-PACKAGE.md`。
+
+## EKI 反汇编
+
+调试已构建模块时可以使用 objdump 风格的命令：
+
+```sh
+cargo elm objdump build/x86_64/modules/example.eki
+cargo elm disassemble build/x86_64/modules/example.eki \
+  --arch x86_64 --disassembler-options=intel
+```
+
+`objdump`、`disasm` 和 `disassemble` 是同一个命令。单变体 EKI 直接给出文件路径；多变体
+文件默认逐个输出，也可以用 `--variant <索引>` 只选择一个。`--segment <索引>`（别名
+`--section`）选择 Code 段，`--symbol <名称>` 可重复选择已登记的代码符号，也接受 GNU 风格
+`--disassemble=<名称>` 或 LLVM 风格 `--disassemble-symbols=<名称>[,...]`；地址过滤使用
+`--start-address`、`--stop-address`，装载地址修正使用 `--base-address` 或
+`--adjust-vma`。`--no-show-raw-insn` 隐藏原始字节，`-M`/`--disassembler-options` 和
+`--tool` 分别传递反汇编器选项、指定 objdump 路径。
+
+该命令先通过 EKI 解析器校验文件，再把 Code 段和符号位置写入临时 ELF，最后调用 GNU 或
+LLVM `objdump`；临时文件会在命令结束时清理。EKI 的地址是镜像相对地址，段间按内核运行时
+页对齐规则布置，因此默认输出与模块装载布局一致。目标为 `any` 的 EKI 必须显式指定
+`--arch`；系统需要安装支持所选架构的 `objdump`，metadata-only EKI 因没有 Code 段而不能
+反汇编。
 
 ## 本地开发
 

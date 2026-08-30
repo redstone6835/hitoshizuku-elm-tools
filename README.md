@@ -72,6 +72,7 @@ cargo elm build . --arch x86_64 --unsigned
 cargo elm --help
 cargo elm build --help
 cargo elm help image-bundle
+cargo elm objdump build/x86_64/modules/example.eki --disassembler-options=intel
 ```
 
 终端输出默认自动启用颜色；可以显式选择颜色策略：
@@ -86,6 +87,39 @@ cargo elm --color never doctor .
 `CARGO_TERM_COLOR=auto|always|never`；`--no-color` 是 `--color never` 的快捷写法；设置
 `NO_COLOR` 会关闭自动颜色（显式 `--color always` 仍可强制开启）。`inspect` 的
 `key=value` 输出保持无装饰，适合脚本读取。
+
+## EKI 反汇编
+
+`objdump` 将 EKI 中经过完整校验的 Code 段转换为临时 ELF，再调用目标架构的 GNU
+或 LLVM `objdump` 输出反汇编。命令主名和两个别名等价：
+
+```sh
+cargo elm objdump build/x86_64/modules/example.eki
+cargo elm disasm build/x86_64/modules/example.eki --arch x86_64 \
+  --disassembler-options=intel --no-show-raw-insn
+cargo elm objdump build/modules.eki --variant 1 --start-address 0x1000 \
+  --stop-address 0x2000
+```
+
+常用选项包括：
+
+- `--variant <索引>` 选择多变体 EKI 中的一个变体；`--all`（默认）输出全部变体。
+- `--segment <索引>` 或 `--section <索引>` 只输出指定 Code 段。
+- `--arch <架构>` 为目标架构为 `any` 的 EKI 指定 `riscv64`、`loongarch64` 或
+  `x86_64`。
+- `--base-address <地址>` 或 `--adjust-vma <地址>` 为 EKI 的镜像相对地址增加装载基址；
+  `--start-address` 和 `--stop-address` 按最终显示地址过滤。
+- `--symbol <名称>` 可重复使用，以只输出已登记的 Code 符号；GNU 兼容写法
+  `--disassemble=<名称>` 和 LLVM 兼容写法 `--disassemble-symbols=<名称>[,...]` 也可使用。
+- `-d`/`-D`、`-z`、`-w` 保留 objdump 的常用语义；`-M`/`--disassembler-options`
+  传递目标反汇编器选项。
+- `--no-show-raw-insn` 隐藏机器字节，`--tool <路径>` 显式指定 GNU/LLVM objdump；未指定时
+  也可使用 `ELM_OBJDUMP` 环境变量。
+
+EKI 不是 ELF，不能直接交给系统 `objdump`。工具只反汇编 EKI 的 Code 段，段地址按运行时的
+页对齐布局计算；没有 Code 段的 metadata-only EKI 会被拒绝。目标为 `any` 且未提供
+`--arch` 时也会报错。系统中需要可执行的 GNU 或 LLVM `objdump`，并且所选工具必须支持该
+目标架构。
 
 ## 语言无关 SDK
 

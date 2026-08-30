@@ -371,6 +371,63 @@ pub(crate) fn help(command: Option<&str>) -> bool {
             "以稳定的 key=value 格式输出 EKI header、block、ABI、import/export 和 mixin 信息。",
             &[("<file.eki>", "要检查的 EKI 或多变体 EKI 文件。")],
         ),
+        Some("objdump") | Some("disasm") | Some("disassemble") => command_help(
+            ui,
+            "objdump",
+            "cargo elm objdump <file.eki> [选项]",
+            "以 objdump 风格反汇编 EKI 中的 Code 段，并显示经过校验的符号地址。`disasm` 和 `disassemble` 是别名。",
+            &[
+                ("<file.eki>", "必选；单变体或多变体 EKI。"),
+                (
+                    "-d, --disassemble",
+                    "反汇编可执行 Code 段；EKI 默认使用该模式。",
+                ),
+                (
+                    "-D, --disassemble-all",
+                    "按 objdump 全段模式反汇编所选 Code 段。",
+                ),
+                ("-z, --disassemble-zeroes", "不要跳过代码段中的连续零字节。"),
+                ("-w, --wide", "使用 objdump 宽输出格式。"),
+                (
+                    "--variant <索引>",
+                    "只反汇编多变体目录中的指定变体；索引从 0 开始。",
+                ),
+                ("--all", "反汇编多变体 EKI 的全部变体（默认也是全部）。"),
+                ("--segment <索引>", "只反汇编指定的 EKI Code 段。"),
+                (
+                    "--arch <架构>",
+                    "为目标为 any 的 EKI 指定 riscv64、loongarch64 或 x86_64。",
+                ),
+                (
+                    "--base-address <地址>",
+                    "给镜像相对地址增加基址；支持十进制和 0x 十六进制。",
+                ),
+                (
+                    "--adjust-vma <地址>",
+                    "`--base-address` 的 objdump 兼容别名。",
+                ),
+                ("--start-address <地址>", "只显示不小于该地址的指令。"),
+                ("--stop-address <地址>", "只显示小于该地址的指令。"),
+                (
+                    "--section <索引>",
+                    "只反汇编指定的 Code 段；`--segment` 的别名。",
+                ),
+                (
+                    "--symbol <名称>",
+                    "只反汇编指定的已验证 EKI 代码符号；可重复，也可写作 `--disassemble=<名称>`。",
+                ),
+                (
+                    "--disassemble-symbols <列表>",
+                    "按逗号分隔的符号选择写法，兼容 LLVM objdump。",
+                ),
+                (
+                    "-M, --disassembler-options <选项>",
+                    "传递目标反汇编器选项，例如 x86 的 `intel`。",
+                ),
+                ("--no-show-raw-insn", "隐藏每条指令前的原始机器字节。"),
+                ("--tool <路径>", "显式指定 GNU/LLVM objdump 可执行文件。"),
+            ],
+        ),
         Some("image-pack-metadata") => command_help(
             ui,
             "image-pack-metadata",
@@ -513,6 +570,10 @@ fn global_help(ui: &Ui) {
     ui.command("build-set", "按 Modules.toml 批量构建模块。");
     ui.command("configure-set", "生成 y/m/n 模块配置。");
     ui.command("inspect", "读取 EKI 的结构化信息。");
+    ui.command(
+        "objdump",
+        "以 objdump 风格反汇编 EKI Code 段（别名：disasm、disassemble）。",
+    );
     ui.command("image-pack-metadata", "生成 metadata-only EKI fixture。");
     ui.command("image-pack-elf", "把 PIE ELF 打包为 EKI。");
     ui.command("image-bundle", "组合多个 Profile/架构变体。");

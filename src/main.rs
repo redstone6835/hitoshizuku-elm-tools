@@ -27,6 +27,7 @@ use elm::{
 };
 
 mod build_set;
+mod disasm;
 mod kernel_interface;
 mod language_package;
 mod project;
@@ -218,6 +219,7 @@ fn run() -> Result<(), String> {
         "test" => cmd_test(command_args),
         "doctor" => cmd_doctor(command_args),
         "inspect" => cmd_inspect(command_args),
+        "objdump" | "disasm" | "disassemble" => disasm::run(command_args),
         "profile-export" => cmd_export_interface(command_args),
         "symbol-probe" => cmd_emit_symbol_probe(command_args),
         "interface-schema" => cmd_interface_schema(command_args),
